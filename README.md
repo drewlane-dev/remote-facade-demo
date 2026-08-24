@@ -6,10 +6,11 @@ real application code runs inside a container, and your tests drive it through a
 narrow interface as if it were local.
 
 ```bash
+./build-host-image.sh                      # once, until v1.1.0 is published
 dotnet run --project tests/OrderBook.Tests
 ```
 
-Eight tests, about fourteen seconds, two containers. Docker is the only
+Eight tests, about three seconds, two containers. Docker is the only
 prerequisite.
 
 ## The two files that matter
@@ -98,14 +99,53 @@ When you genuinely need a live object that calls *back* into the test — a
 progress handler, a mock you want to `Verify()` — that is `LIB_CALLBACKS`, which
 passes a reference rather than data and works for interfaces only.
 
-## Note on versions
+## How the image is referenced
 
-Composition-root hosting is **v1.1**, which is not published yet. So this demo:
+The fixture names the image the way any consumer would, and knows nothing about
+a Dockerfile:
 
-- builds the `remote-class-host` image from a sibling checkout at
-  `../remote-class-host`, rather than pulling `ghcr.io/drewlane-dev/remote-class-host:1`
-- references `RemoteClass.Client` by project path rather than from nuget.org
+```csharp
+private const string HostImage = "ghcr.io/drewlane-dev/remote-class-host:1.1.0";
 
-Both are marked in the code. Once v1.1.0 ships, swap them for the published
-image tag and `<PackageReference Include="RemoteClass.Client" Version="1.*" />`,
-and the sibling checkout is no longer needed.
+var builder = new ContainerBuilder()
+    .WithImage(HostImage)
+    .WithResourceMapping(new DirectoryInfo(pluginDir), "/plugin")
+    .WithEnvironment("LIB_DIR", "/plugin")
+    ...
+```
+
+Pinned to the MINOR version deliberately. Composition-root hosting arrived in
+1.1; pinning to `1` would silently accept a future 1.x this demo has not been
+checked against.
+
+**The one temporary step.** That tag is not on the registry yet, because v1.1.0
+is unpublished. `build-host-image.sh` builds it locally under the same name, so
+Docker finds it and never reaches for the registry.
+
+When v1.1.0 ships, **delete `build-host-image.sh`**. Nothing else changes — the
+demo already asks for the published tag, and the image is simply pulled.
+
+The client is still referenced by project path for the same reason. Once the
+package is on nuget.org, swap that `ProjectReference` for:
+
+```xml
+<PackageReference Include="RemoteClass.Client" Version="1.1.*" />
+```
+
+## Publishing your own application image
+
+This demo copies the application into a stock host container at test time, which
+keeps the loop fast and needs no image of your own. In production you may prefer
+to bake the application in:
+
+```dockerfile
+FROM ghcr.io/drewlane-dev/remote-class-host:1.1.0
+COPY publish/ /plugin/
+ENV LIB_DIR=/plugin \
+    LIB_ASSEMBLY=OrderBook.dll \
+    LIB_REGISTRAR=OrderBook.DemoStartup.Configure
+```
+
+Then the fixture references your image and drops the resource mapping and the
+environment loop entirely. The trade is a build step per change against a
+self-contained artifact you can push to a registry.

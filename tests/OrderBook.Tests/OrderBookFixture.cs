@@ -1,21 +1,30 @@
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
-using DotNet.Testcontainers.Images;
 using OrderBook;
 using RemoteClassHost.Client;
 
 namespace OrderBook.Tests;
 
 /// <summary>
-/// Starts one container hosting the demo's composition root, and hands tests a
+/// Starts containers hosting the demo's composition root, and hands tests a
 /// <see cref="RemoteHost"/> to resolve facades from.
 ///
-/// Read the three steps in StartAsync — they are the whole integration story.
+/// This references the host image by TAG, exactly as a production consumer
+/// would. It has no idea a Dockerfile exists anywhere.
 /// </summary>
 public sealed class OrderBookFixture : IAsyncLifetime
 {
-    private IFutureDockerImage? _image;
+    /// <summary>
+    /// The published image and version this demo is written against.
+    ///
+    /// Pinned to the MINOR version deliberately: composition-root hosting
+    /// arrived in 1.1, and pinning to `1` would silently accept a future 1.x
+    /// whose behaviour this demo has not been checked against.
+    /// </summary>
+    private const string HostImage = "ghcr.io/drewlane-dev/remote-class-host:1.1.0";
+
     private IContainer? _container;
+    private IContainer? _fixedClock;
 
     /// <summary>Non-null when the environment cannot run the demo.</summary>
     public string? SkipReason { get; private set; }
@@ -23,10 +32,8 @@ public sealed class OrderBookFixture : IAsyncLifetime
     /// <summary>The client. Tests resolve facades from this.</summary>
     public RemoteHost Host { get; private set; } = null!;
 
-    /// <summary>A second host on a container whose clock is fixed.</summary>
+    /// <summary>A second host whose composition root fixes the clock.</summary>
     public RemoteHost FixedClockHost { get; private set; } = null!;
-
-    private IContainer? _fixedClock;
 
     public async ValueTask InitializeAsync()
     {
@@ -36,45 +43,18 @@ public sealed class OrderBookFixture : IAsyncLifetime
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            SkipReason = $"demo fixture failed to start: {ex.Message}";
+            SkipReason = Explain(ex);
             await SafeTeardownAsync();
         }
     }
 
     private async Task StartAsync()
     {
-        // STEP 1 — build the remote-class-host image from source.
-        //
-        // Normally this would be `.WithImage("ghcr.io/drewlane-dev/remote-class-host:1")`
-        // and there would be no build step at all. The composition-root feature
-        // is v1.1, which is not published yet, so the demo builds the image from
-        // the sibling checkout instead. Swap this for the published tag once
-        // v1.1.0 ships.
-        var hostRepo = Path.GetFullPath(
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "remote-class-host"));
-
-        if (!File.Exists(Path.Combine(hostRepo, "Dockerfile")))
-        {
-            throw new InvalidOperationException(
-                $"expected the remote-class-host checkout at {hostRepo}. " +
-                "The demo builds the image from source because composition-root " +
-                "hosting is not in a published tag yet.");
-        }
-
-        _image = new ImageFromDockerfileBuilder()
-            .WithDockerfileDirectory(hostRepo)
-            .WithDockerfile("Dockerfile")
-            .WithName("remote-class-host:demo")
-            .WithCleanUp(false)
-            .Build();
-
-        await _image.CreateAsync();
-
-        // STEP 2 — publish the application so the container can load it.
+        // STEP 1 — publish the application so the container can load it.
         //
         // The host loads a PUBLISH folder, not a build output: it needs the
-        // dependency DLLs beside the library. The MSBuild target in this test
-        // project produces it (see OrderBook.Tests.csproj).
+        // dependency DLLs beside the library. The PublishApplication target in
+        // this csproj produces it.
         var plugin = Path.Combine(AppContext.BaseDirectory, "plugin");
 
         if (!File.Exists(Path.Combine(plugin, "OrderBook.dll")))
@@ -84,6 +64,7 @@ public sealed class OrderBookFixture : IAsyncLifetime
                 "The PublishApplication target in this csproj should have produced it.");
         }
 
+        // STEP 2 — start containers pointed at a composition root.
         _container = await StartHostAsync(plugin, typeof(DemoStartup));
         _fixedClock = await StartHostAsync(plugin, typeof(FixedClockStartup));
 
@@ -92,17 +73,16 @@ public sealed class OrderBookFixture : IAsyncLifetime
     }
 
     /// <summary>
-    /// STEP 3 — start a container pointed at a composition root.
-    ///
     /// Note how little configuration there is. No LIB_TYPE, no LIB_OPTIONS, no
-    /// LIB_SERVICES: RemoteHostEnvironment derives LIB_ASSEMBLY and
-    /// LIB_REGISTRAR from the startup TYPE, so a rename is a compile error here
-    /// rather than a container that fails to start with a string mismatch.
+    /// LIB_SERVICES: <see cref="RemoteHostEnvironment"/> derives LIB_ASSEMBLY
+    /// and LIB_REGISTRAR from the startup TYPE, so renaming it is a compile
+    /// error here rather than a container that fails to start on a string
+    /// mismatch.
     /// </summary>
     private static async Task<IContainer> StartHostAsync(string pluginDir, Type startup)
     {
         var builder = new ContainerBuilder()
-            .WithImage("remote-class-host:demo")
+            .WithImage(HostImage)
             // Copied over the Docker API rather than bind-mounted, so this works
             // the same whether the test runs on the host or inside a container.
             .WithResourceMapping(new DirectoryInfo(pluginDir), "/plugin")
@@ -118,6 +98,33 @@ public sealed class OrderBookFixture : IAsyncLifetime
         var container = builder.Build();
         await container.StartAsync();
         return container;
+    }
+
+    /// <summary>
+    /// A missing image is the one failure a first-time reader will hit, because
+    /// v1.1.0 is not published yet. Saying so beats a raw pull error.
+    /// </summary>
+    private static string Explain(Exception ex)
+    {
+        var message = ex.ToString();
+
+        var looksLikeMissingImage =
+            message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("manifest unknown", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("pull access denied", StringComparison.OrdinalIgnoreCase);
+
+        if (!looksLikeMissingImage)
+        {
+            return $"demo fixture failed to start: {ex.Message}";
+        }
+
+        return
+            $"could not obtain {HostImage}.\n\n" +
+            "Composition-root hosting is v1.1, which is not published yet, so this\n" +
+            "tag cannot be pulled. Build it once from a remote-class-host checkout:\n\n" +
+            "    ./build-host-image.sh            (or, by hand:)\n" +
+            $"    docker build -t {HostImage} ../remote-class-host\n\n" +
+            "Once v1.1.0 ships this step disappears and the image is simply pulled.";
     }
 
     public async ValueTask DisposeAsync() => await SafeTeardownAsync();
