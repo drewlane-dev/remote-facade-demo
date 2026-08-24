@@ -125,12 +125,42 @@ Docker finds it and never reaches for the registry.
 When v1.1.0 ships, **delete `build-host-image.sh`**. Nothing else changes — the
 demo already asks for the published tag, and the image is simply pulled.
 
-The client is still referenced by project path for the same reason. Once the
-package is on nuget.org, swap that `ProjectReference` for:
+The client comes from a locally packed copy in `nuget.config` for the same
+reason. Once it is on nuget.org, delete that file — the `PackageReference` is
+already written the way it will stay.
+
+## Getting your library into the container
+
+The container loads a **publish** folder, not a bin folder: it resolves a
+library's dependencies from the directory it was loaded from, so they have to
+sit beside it. A `ProjectReference` gives the *test process* the types but never
+produces such a folder.
+
+You do not have to arrange that yourself. `RemoteClass.Client`'s package ships
+an MSBuild target that NuGet imports automatically, so one item is enough:
 
 ```xml
-<PackageReference Include="RemoteClass.Client" Version="1.1.*" />
+<ItemGroup>
+  <RemoteClassPlugin Include="..\..\src\OrderBook\OrderBook.csproj" />
+</ItemGroup>
 ```
+
+which produces `$(OutDir)plugin/OrderBook/` on every build, and the fixture maps
+that directory into the container.
+
+Two things worth knowing:
+
+- **It publishes on every build, by design.** An earlier version tried to skip
+  when nothing changed, keyed on the `.csproj` timestamp — which meant editing a
+  `.cs` file skipped the publish and the container kept loading a stale
+  assembly while the test process compiled against the new one. Tests passed
+  against code that no longer existed. The inner publish does its own up-to-date
+  checking, so the cost is a target invocation rather than real work.
+- **The payload stays small.** The published folder here is 216 KB and 4 files.
+  Pointing the container at the test's own output instead would work, but that
+  is 13 MB and 20 files — xunit, Testcontainers and the rest — copied into every
+  container, and it puts test-framework assemblies on the container's
+  resolution path.
 
 ## Publishing your own application image
 

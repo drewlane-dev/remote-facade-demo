@@ -50,18 +50,24 @@ public sealed class OrderBookFixture : IAsyncLifetime
 
     private async Task StartAsync()
     {
-        // STEP 1 — publish the application so the container can load it.
+        // STEP 1 — locate the published application.
         //
-        // The host loads a PUBLISH folder, not a build output: it needs the
-        // dependency DLLs beside the library. The PublishApplication target in
-        // this csproj produces it.
-        var plugin = Path.Combine(AppContext.BaseDirectory, "plugin");
+        // Nothing here publishes it: RemoteClass.Client's package ships an
+        // MSBuild target that NuGet imports automatically, and it publishes
+        // every <RemoteClassPlugin> named in the csproj into
+        // plugin/<ProjectName>/ on build.
+        //
+        // A publish rather than a plain copy, because the container loads a
+        // publish folder — it resolves the library's dependencies from the same
+        // directory, so they have to be sitting beside it.
+        var plugin = Path.Combine(AppContext.BaseDirectory, "plugin", "OrderBook");
 
         if (!File.Exists(Path.Combine(plugin, "OrderBook.dll")))
         {
             throw new InvalidOperationException(
-                $"expected the published application at {plugin}. " +
-                "The PublishApplication target in this csproj should have produced it.");
+                $"expected the published application at {plugin}. Check the csproj has " +
+                "<RemoteClassPlugin Include=\"..\\..\\src\\OrderBook\\OrderBook.csproj\" /> — " +
+                "that item is what RemoteClass.Client's build target consumes.");
         }
 
         // STEP 2 — start containers pointed at a composition root.
