@@ -107,31 +107,11 @@ public sealed class OrderBookFixture : IAsyncLifetime
     }
 
     /// <summary>
-    /// A missing image is the one failure a first-time reader will hit, because
-    /// v1.1.0 is not published yet. Saying so beats a raw pull error.
+    /// A pull failure is the one thing a first-time reader is likely to hit, so
+    /// name the image rather than letting a raw Docker error through.
     /// </summary>
-    private static string Explain(Exception ex)
-    {
-        var message = ex.ToString();
-
-        var looksLikeMissingImage =
-            message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("manifest unknown", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("pull access denied", StringComparison.OrdinalIgnoreCase);
-
-        if (!looksLikeMissingImage)
-        {
-            return $"demo fixture failed to start: {ex.Message}";
-        }
-
-        return
-            $"could not obtain {HostImage}.\n\n" +
-            "Composition-root hosting is v1.1, which is not published yet, so this\n" +
-            "tag cannot be pulled. Build it once from a remote-class-host checkout:\n\n" +
-            "    ./build-host-image.sh            (or, by hand:)\n" +
-            $"    docker build -t {HostImage} ../remote-class-host\n\n" +
-            "Once v1.1.0 ships this step disappears and the image is simply pulled.";
-    }
+    private static string Explain(Exception ex) =>
+        $"demo fixture failed to start (image {HostImage}): {ex.Message}";
 
     public async ValueTask DisposeAsync() => await SafeTeardownAsync();
 

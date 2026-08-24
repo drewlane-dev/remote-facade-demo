@@ -6,7 +6,6 @@ real application code runs inside a container, and your tests drive it through a
 narrow interface as if it were local.
 
 ```bash
-./build-host-image.sh                      # once, until v1.1.0 is published
 dotnet run --project tests/OrderBook.Tests
 ```
 
@@ -117,17 +116,6 @@ var builder = new ContainerBuilder()
 Pinned to the MINOR version deliberately. Composition-root hosting arrived in
 1.1; pinning to `1` would silently accept a future 1.x this demo has not been
 checked against.
-
-**The one temporary step.** That tag is not on the registry yet, because v1.1.0
-is unpublished. `build-host-image.sh` builds it locally under the same name, so
-Docker finds it and never reaches for the registry.
-
-When v1.1.0 ships, **delete `build-host-image.sh`**. Nothing else changes — the
-demo already asks for the published tag, and the image is simply pulled.
-
-The client comes from a locally packed copy in `nuget.config` for the same
-reason. Once it is on nuget.org, delete that file — the `PackageReference` is
-already written the way it will stay.
 
 ## Getting your library into the container
 
