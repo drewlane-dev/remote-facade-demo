@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="3.1.0" />
+    <PackageReference Include="Testcontainers" Version="4.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The application, so the tests hold the same interfaces the container serves. -->
+    <ProjectReference Include="..\..\src\OrderBook\OrderBook.csproj" />
+    <!--
+      The typed client. Referenced by project path because composition-root
+      hosting is v1.1 and not published yet; swap for
+      <PackageReference Include="RemoteClass.Client" Version="1.*" /> once it is.
+    -->
+    <ProjectReference Include="..\..\..\remote-class-host\src\RemoteClass.Client\RemoteClass.Client.csproj" />
+  </ItemGroup>
+
+  <!--
+    The container loads a PUBLISH folder, not a build output: it needs the
+    dependency DLLs beside the library. A plain ProjectReference gives this test
+    project the types but does not produce that folder, so publish the
+    application into the test output where the fixture looks for it.
+  -->
+  <Target Name="PublishApplication" AfterTargets="Build">
+    <MSBuild Projects="..\..\src\OrderBook\OrderBook.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);PublishDir=$(MSBuildProjectDirectory)/$(OutDir)plugin/" />
+  </Target>
+
+</Project>
