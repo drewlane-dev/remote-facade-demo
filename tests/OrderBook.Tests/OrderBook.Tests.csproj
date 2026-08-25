@@ -21,14 +21,14 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
 
     <!--
-      The typed client. Note there is no <RemoteClassPlugin> item: that exists to
+      The typed client. Note there is no <RemoteFacadePlugin> item: that exists to
       publish a SEPARATE library into a folder the container can load, and this
       project cannot be its own plugin — the target runs after Build and needs
       Publish, which needs Build, so MSBuild rejects it with MSB4006.
       Because the startup and facade live here, the fixture points the container
       at this project's own output directory instead.
     -->
-    <PackageReference Include="RemoteClass.Client" Version="1.1.0" />
+    <PackageReference Include="RemoteFacade.Client" Version="2.0.0" />
   </ItemGroup>
 
 </Project>

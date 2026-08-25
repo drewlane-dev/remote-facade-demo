@@ -7,7 +7,7 @@ namespace OrderBook;
 ///
 /// Everything crossing this boundary is a simple value: strings, ints, records.
 /// That is deliberate, and it is the single most important design rule when
-/// using remote-class-host. Arguments and return values cross BY VALUE: an
+/// using remote-facade-host. Arguments and return values cross BY VALUE: an
 /// object with methods is serialized, rebuilt inside the container from its
 /// state, and its methods run on that COPY. Mutations never come back.
 ///

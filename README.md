@@ -1,7 +1,7 @@
 # remote-class-demo
 
 A small, runnable demonstration of hosting a **composition root** with
-[`remote-class-host`](https://github.com/drewlane-dev/remote-class-host): your
+[`remote-facade-host`](https://github.com/drewlane-dev/remote-facade-host): your
 real application code runs inside a container, and your tests drive it through a
 narrow interface as if it were local.
 
@@ -104,7 +104,7 @@ The fixture names the image the way any consumer would, and knows nothing about
 a Dockerfile:
 
 ```csharp
-private const string HostImage = "ghcr.io/drewlane-dev/remote-class-host:1.1.0";
+private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:2.0.0";
 
 var builder = new ContainerBuilder()
     .WithImage(HostImage)
@@ -137,16 +137,16 @@ a handful of containers; worth avoiding if you start many, or if you want a hard
 guarantee that nothing test-only can load inside the container.
 
 **The alternative: a separate project.** Put the startup and facade in their own
-small library, and `RemoteClass.Client`'s MSBuild target publishes it for you:
+small library, and `RemoteFacade.Client`'s MSBuild target publishes it for you:
 
 ```xml
-<RemoteClassPlugin Include="..\TestSupport\TestSupport.csproj" />
+<RemoteFacadePlugin Include="..\TestSupport\TestSupport.csproj" />
 ```
 
 which produces `$(OutDir)plugin/TestSupport/`, and the fixture maps that instead
 of `AppContext.BaseDirectory`. Same code, 216 KB payload.
 
-**What does NOT work:** pointing `<RemoteClassPlugin>` at the project that
+**What does NOT work:** pointing `<RemoteFacadePlugin>` at the project that
 contains it. The target runs after `Build` and needs `Publish`, which needs
 `Build`, so MSBuild refuses with `MSB4006: circular dependency`. If the code
 lives in your test project, use `AppContext.BaseDirectory` — do not try to make
@@ -159,7 +159,7 @@ keeps the loop fast and needs no image of your own. In production you may prefer
 to bake the application in:
 
 ```dockerfile
-FROM ghcr.io/drewlane-dev/remote-class-host:1.1.0
+FROM ghcr.io/drewlane-dev/remote-facade-host:2.0.0
 COPY publish/ /plugin/
 ENV LIB_DIR=/plugin \
     LIB_ASSEMBLY=OrderBook.dll \
