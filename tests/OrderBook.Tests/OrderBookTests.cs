@@ -1,5 +1,5 @@
 using OrderBook;
-using RemoteClassHost.Client;
+using RemoteFacadeHost.Client;
 
 namespace OrderBook.Tests;
 

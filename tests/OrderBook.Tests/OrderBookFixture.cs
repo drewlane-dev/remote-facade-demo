@@ -1,7 +1,7 @@
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using OrderBook;
-using RemoteClassHost.Client;
+using RemoteFacadeHost.Client;
 
 namespace OrderBook.Tests;
 
@@ -21,7 +21,7 @@ public sealed class OrderBookFixture : IAsyncLifetime
     /// arrived in 1.1, and pinning to `1` would silently accept a future 1.x
     /// whose behaviour this demo has not been checked against.
     /// </summary>
-    private const string HostImage = "ghcr.io/drewlane-dev/remote-class-host:1.1.0";
+    private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:2.0.0";
 
     private IContainer? _container;
     private IContainer? _fixedClock;
@@ -56,7 +56,7 @@ public sealed class OrderBookFixture : IAsyncLifetime
         // the container loads this project's own output directory. Nothing has
         // to be published anywhere first.
         //
-        // Note what is NOT possible: pointing <RemoteClassPlugin> at this same
+        // Note what is NOT possible: pointing <RemoteFacadePlugin> at this same
         // project. That target runs after Build and needs Publish, which needs
         // Build — MSBuild rejects it with MSB4006, a circular dependency. The
         // plugin item is for publishing a SEPARATE library; when the code lives
