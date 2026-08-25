@@ -16,7 +16,7 @@ prerequisite.
 
 Everything else is scaffolding. The pattern is these two.
 
-**1. A startup — all the wiring, in C#** ([`DemoStartup.cs`](src/OrderBook/DemoStartup.cs)):
+**1. A startup — all the wiring, in C#** ([`DemoStartup.cs`](tests/OrderBook.Tests/DemoStartup.cs)):
 
 ```csharp
 public static class DemoStartup
@@ -33,7 +33,7 @@ public static class DemoStartup
 }
 ```
 
-**2. A facade — the surface the test drives** ([`OrderBook.cs`](src/OrderBook/OrderBook.cs)):
+**2. A facade — the surface the test drives** ([`OrderBook.cs`](tests/OrderBook.Tests/OrderBook.cs)):
 
 ```csharp
 public interface IOrderBook
@@ -117,38 +117,40 @@ Pinned to the MINOR version deliberately. Composition-root hosting arrived in
 1.1; pinning to `1` would silently accept a future 1.x this demo has not been
 checked against.
 
-## Getting your library into the container
+## Where the code lives
 
-The container loads a **publish** folder, not a bin folder: it resolves a
-library's dependencies from the directory it was loaded from, so they have to
-sit beside it. A `ProjectReference` gives the *test process* the types but never
-produces such a folder.
+Everything here — the application, the startup, the facade and the tests — is in
+**one project**. The container loads the test assembly's own output directory:
 
-You do not have to arrange that yourself. `RemoteClass.Client`'s package ships
-an MSBuild target that NuGet imports automatically, so one item is enough:
-
-```xml
-<ItemGroup>
-  <RemoteClassPlugin Include="..\..\src\OrderBook\OrderBook.csproj" />
-</ItemGroup>
+```csharp
+var plugin = AppContext.BaseDirectory;
 ```
 
-which produces `$(OutDir)plugin/OrderBook/` on every build, and the fixture maps
-that directory into the container.
+That is the simplest arrangement, and the right one when the startup and facade
+are test scaffolding you want sitting next to the tests that use them.
 
-Two things worth knowing:
+**What it costs.** The whole test output is copied into every container: here
+that is 13 MB and 19 assemblies — xunit, Testcontainers, Docker.DotNet and the
+rest — against 216 KB and 4 for the application alone. It also puts
+test-framework assemblies on the container's assembly-resolution path. Fine for
+a handful of containers; worth avoiding if you start many, or if you want a hard
+guarantee that nothing test-only can load inside the container.
 
-- **It publishes on every build, by design.** An earlier version tried to skip
-  when nothing changed, keyed on the `.csproj` timestamp — which meant editing a
-  `.cs` file skipped the publish and the container kept loading a stale
-  assembly while the test process compiled against the new one. Tests passed
-  against code that no longer existed. The inner publish does its own up-to-date
-  checking, so the cost is a target invocation rather than real work.
-- **The payload stays small.** The published folder here is 216 KB and 4 files.
-  Pointing the container at the test's own output instead would work, but that
-  is 13 MB and 20 files — xunit, Testcontainers and the rest — copied into every
-  container, and it puts test-framework assemblies on the container's
-  resolution path.
+**The alternative: a separate project.** Put the startup and facade in their own
+small library, and `RemoteClass.Client`'s MSBuild target publishes it for you:
+
+```xml
+<RemoteClassPlugin Include="..\TestSupport\TestSupport.csproj" />
+```
+
+which produces `$(OutDir)plugin/TestSupport/`, and the fixture maps that instead
+of `AppContext.BaseDirectory`. Same code, 216 KB payload.
+
+**What does NOT work:** pointing `<RemoteClassPlugin>` at the project that
+contains it. The target runs after `Build` and needs `Publish`, which needs
+`Build`, so MSBuild refuses with `MSB4006: circular dependency`. If the code
+lives in your test project, use `AppContext.BaseDirectory` — do not try to make
+the project publish itself.
 
 ## Publishing your own application image
 

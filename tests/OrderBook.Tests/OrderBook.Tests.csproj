@@ -15,26 +15,20 @@
   <ItemGroup>
     <PackageReference Include="xunit.v3" Version="3.1.0" />
     <PackageReference Include="Testcontainers" Version="4.6.0" />
-  </ItemGroup>
 
-  <ItemGroup>
-    <!-- The application, so the tests hold the same interfaces the container serves. -->
-    <ProjectReference Include="..\..\src\OrderBook\OrderBook.csproj" />
-    <!-- The typed client. Its package also ships the plugin-publish target used below. -->
-    <PackageReference Include="RemoteClass.Client" Version="1.1.0" />
-  </ItemGroup>
+    <!-- The application lives in this project now, so its dependencies do too. -->
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
 
-  <ItemGroup>
     <!--
-      This one line replaces a hand-written MSBuild target. RemoteClass.Client's
-      package ships build/RemoteClass.Client.targets, which NuGet imports
-      automatically, and it publishes each named project into
-      $(OutDir)plugin/<ProjectName>/ where the fixture looks for it.
-
-      A publish rather than a plain copy, because the container loads a publish
-      folder: it needs the dependency assemblies sitting beside the library.
+      The typed client. Note there is no <RemoteClassPlugin> item: that exists to
+      publish a SEPARATE library into a folder the container can load, and this
+      project cannot be its own plugin — the target runs after Build and needs
+      Publish, which needs Build, so MSBuild rejects it with MSB4006.
+      Because the startup and facade live here, the fixture points the container
+      at this project's own output directory instead.
     -->
-    <RemoteClassPlugin Include="..\..\src\OrderBook\OrderBook.csproj" />
+    <PackageReference Include="RemoteClass.Client" Version="1.1.0" />
   </ItemGroup>
 
 </Project>

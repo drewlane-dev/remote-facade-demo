@@ -50,24 +50,24 @@ public sealed class OrderBookFixture : IAsyncLifetime
 
     private async Task StartAsync()
     {
-        // STEP 1 — locate the published application.
+        // STEP 1 — the application IS this test assembly.
         //
-        // Nothing here publishes it: RemoteClass.Client's package ships an
-        // MSBuild target that NuGet imports automatically, and it publishes
-        // every <RemoteClassPlugin> named in the csproj into
-        // plugin/<ProjectName>/ on build.
+        // The startup and facade are defined right here in the test project, so
+        // the container loads this project's own output directory. Nothing has
+        // to be published anywhere first.
         //
-        // A publish rather than a plain copy, because the container loads a
-        // publish folder — it resolves the library's dependencies from the same
-        // directory, so they have to be sitting beside it.
-        var plugin = Path.Combine(AppContext.BaseDirectory, "plugin", "OrderBook");
+        // Note what is NOT possible: pointing <RemoteClassPlugin> at this same
+        // project. That target runs after Build and needs Publish, which needs
+        // Build — MSBuild rejects it with MSB4006, a circular dependency. The
+        // plugin item is for publishing a SEPARATE library; when the code lives
+        // here, use this directory directly instead.
+        var plugin = AppContext.BaseDirectory;
 
-        if (!File.Exists(Path.Combine(plugin, "OrderBook.dll")))
+        if (!File.Exists(Path.Combine(plugin, "OrderBook.Tests.dll")))
         {
             throw new InvalidOperationException(
-                $"expected the published application at {plugin}. Check the csproj has " +
-                "<RemoteClassPlugin Include=\"..\\..\\src\\OrderBook\\OrderBook.csproj\" /> — " +
-                "that item is what RemoteClass.Client's build target consumes.");
+                $"expected this test assembly at {plugin}, which is also the " +
+                "folder the container loads.");
         }
 
         // STEP 2 — start containers pointed at a composition root.
