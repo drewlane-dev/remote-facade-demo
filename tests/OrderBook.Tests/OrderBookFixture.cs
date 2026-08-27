@@ -17,11 +17,20 @@ public sealed class OrderBookFixture : IAsyncLifetime
     /// <summary>
     /// The published image and version this demo is written against.
     ///
-    /// Pinned to the MINOR version deliberately: composition-root hosting
-    /// arrived in 1.1, and pinning to `1` would silently accept a future 1.x
-    /// whose behaviour this demo has not been checked against.
+    /// Pinned exactly, not to `3`: this demo shows behaviour that arrived in
+    /// specific releases, and floating on a major would silently accept a
+    /// version it has never been run against.
     /// </summary>
-    private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:2.0.0";
+    private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:3.2.0";
+
+    /// <summary>
+    /// The venue each container is configured with, pushed in from HERE rather
+    /// than baked into the startup. Two containers, two values: that is the
+    /// point of typed options, and it is not expressible with a literal in
+    /// Configure().
+    /// </summary>
+    private const string PrimaryVenue = "LSE";
+    private const string SecondaryVenue = "XETRA";
 
     private IContainer? _container;
     private IContainer? _fixedClock;
@@ -70,38 +79,44 @@ public sealed class OrderBookFixture : IAsyncLifetime
                 "folder the container loads.");
         }
 
-        // STEP 2 — start containers pointed at a composition root.
-        _container = await StartHostAsync(plugin, typeof(DemoStartup));
-        _fixedClock = await StartHostAsync(plugin, typeof(FixedClockStartup));
+        // STEP 2 — start containers pointed at a composition root, each with
+        // its OWN configuration.
+        _container = await StartHostAsync(plugin, typeof(DemoStartup), PrimaryVenue);
+        _fixedClock = await StartHostAsync(plugin, typeof(FixedClockStartup), SecondaryVenue);
 
-        Host = RemoteHost.At($"http://localhost:{_container.GetMappedPublicPort(8080)}");
-        FixedClockHost = RemoteHost.At($"http://localhost:{_fixedClock.GetMappedPublicPort(8080)}");
+        // RemoteHost() resolves the MAPPED port, so there is no URL to build
+        // by hand and no chance of reaching the container's own 8080 instead.
+        Host = _container.RemoteHost();
+        FixedClockHost = _fixedClock.RemoteHost();
     }
 
     /// <summary>
-    /// Note how little configuration there is. No LIB_TYPE, no LIB_OPTIONS, no
-    /// LIB_SERVICES: <see cref="RemoteHostEnvironment"/> derives LIB_ASSEMBLY
-    /// and LIB_REGISTRAR from the startup TYPE, so renaming it is a compile
-    /// error here rather than a container that fails to start on a string
-    /// mismatch.
+    /// Everything a facade container needs, in one call.
+    ///
+    /// WithRemoteFacade supplies the plugin transport, LIB_DIR, LIB_ASSEMBLY,
+    /// LIB_REGISTRAR, a random port binding and a wait on /health. The last of
+    /// those matters: the host binds its port BEFORE the service graph is
+    /// built, so waiting on the port can hand back a container that is
+    /// listening and cannot yet answer anything.
+    ///
+    /// LIB_ASSEMBLY and LIB_REGISTRAR are derived from the startup TYPE, so
+    /// renaming it is a compile error here rather than a container that starts
+    /// and cannot find what it was told to serve.
     /// </summary>
-    private static async Task<IContainer> StartHostAsync(string pluginDir, Type startup)
+    private static async Task<IContainer> StartHostAsync(string pluginDir, Type startup, string venue)
     {
-        var builder = new ContainerBuilder()
+        var container = new ContainerBuilder()
             .WithImage(HostImage)
-            // Copied over the Docker API rather than bind-mounted, so this works
-            // the same whether the test runs on the host or inside a container.
-            .WithResourceMapping(new DirectoryInfo(pluginDir), "/plugin")
-            .WithEnvironment("LIB_DIR", "/plugin")
-            .WithPortBinding(8080, true)
-            .WithWaitStrategy(Wait.ForUnixContainer().UntilPortIsAvailable(8080));
+            // Copy, not a bind mount. A bind mount names a path on the Docker
+            // HOST, so it breaks the moment this test runs inside a container
+            // itself -- the container would get an empty directory and fail
+            // with "assembly not found", naming the file but not the reason.
+            .WithRemoteFacade(startup, pluginDir, transport: PluginTransport.Copy)
+            // Typed, not a string. Rename Venue and this stops compiling;
+            // misspell an environment variable and nothing would have.
+            .WithOptions(new OrderBookOptions { Venue = venue })
+            .Build();
 
-        foreach (var (key, value) in RemoteHostEnvironment.For(startup))
-        {
-            builder = builder.WithEnvironment(key, value);
-        }
-
-        var container = builder.Build();
         await container.StartAsync();
         return container;
     }

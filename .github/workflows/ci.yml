@@ -1,0 +1,32 @@
+name: ci
+
+# This demo is the thing people copy, so it going stale is a real cost -- it sat
+# two majors behind for weeks with nothing to notice. Running it against the
+# PUBLISHED image and packages means a release that breaks a consumer breaks
+# this build too.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly, because the failure mode here is not a commit: it is a new host
+  # release changing something this demo relies on. Nothing would push to this
+  # repo to reveal that.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # Pulls ghcr.io/drewlane-dev/remote-facade-host and restores
+      # RemoteFacade.Client / RemoteFacade.Testcontainers from nuget.org, both
+      # at the versions this demo pins. Nothing here builds the host.
+      - name: Test
+        run: dotnet test tests/OrderBook.Tests/OrderBook.Tests.csproj

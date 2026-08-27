@@ -57,14 +57,35 @@ Two environment variables, both derived from the startup **type** — so renamin
 it is a compile error rather than a container that fails to start:
 
 ```csharp
-foreach (var (key, value) in RemoteHostEnvironment.For(typeof(DemoStartup)))
-    builder = builder.WithEnvironment(key, value);
+.WithRemoteFacade(typeof(DemoStartup), pluginDir, transport: PluginTransport.Copy)
 ```
 
-That produces `LIB_ASSEMBLY=OrderBook.dll` and
-`LIB_REGISTRAR=OrderBook.DemoStartup.Configure`. There is no `LIB_TYPE`, no
-`LIB_OPTIONS`, no `LIB_SERVICES` — the startup says all of it in C#, where a
-factory registration handles any constructor shape the language allows.
+That supplies `LIB_ASSEMBLY=OrderBook.dll`,
+`LIB_REGISTRAR=OrderBook.DemoStartup.Configure`, the plugin transport, a random
+port binding and a wait on `/health` — not on the port, which the host binds
+*before* the graph is built.
+
+Since v3 a startup is the only way to host; `LIB_TYPE` and `LIB_OPTIONS` are
+gone. The startup says all of it in C#, where a factory registration handles
+any constructor shape the language allows.
+
+## Configuration comes from the test
+
+The venue is not a literal in the startup. The fixture pushes a typed object in
+and the startup binds it back:
+
+```csharp
+// fixture — one container per venue
+.WithOptions(new OrderBookOptions { Venue = "LSE" })
+
+// DemoStartup
+services.BindOptions<OrderBookOptions>();
+```
+
+`OrderBookOptions` is the only shared symbol, so renaming a property breaks
+both ends at compile time — and because the value is per container, one startup
+serves two differently-configured instances. A section the fixture never set is
+a startup failure, not a silent default.
 
 ## What each test demonstrates
 
@@ -73,6 +94,7 @@ factory registration handles any constructor shape the language allows.
 | `Calling_a_remote_instance_looks_local` | The basic shape |
 | `A_record_round_trips` | Data crosses cleanly |
 | `A_synchronous_method_works_unchanged` | No reshaping needed; `int`, not `Task<int>` |
+| `Each_container_gets_its_own_configuration` | Typed options, per container, from one startup |
 | `Two_facades_share_one_object_graph` | One container, one graph, two surfaces |
 | `A_second_startup_substitutes_a_dependency` | Substitution = another startup, in C# |
 | `An_exception_survives_the_boundary` | Failures keep their message |
@@ -94,9 +116,10 @@ A narrow interface taking simple values keeps the interesting objects inside the
 container, where the startup built them, instead of copying them across a
 boundary that cannot carry their identity.
 
-When you genuinely need a live object that calls *back* into the test — a
-progress handler, a mock you want to `Verify()` — that is `LIB_CALLBACKS`, which
-passes a reference rather than data and works for interfaces only.
+If you need a live object that calls *back* into the test — a progress handler,
+a mock you want to `Verify()` — that was `LIB_CALLBACKS`. It was removed in v3
+and preserved on the host repo's `callbacks` branch. Substitute with a second
+startup instead, as `FixedClockStartup` does here.
 
 ## How the image is referenced
 
@@ -104,18 +127,29 @@ The fixture names the image the way any consumer would, and knows nothing about
 a Dockerfile:
 
 ```csharp
-private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:2.0.0";
+private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:3.2.0";
 
-var builder = new ContainerBuilder()
+var container = new ContainerBuilder()
     .WithImage(HostImage)
-    .WithResourceMapping(new DirectoryInfo(pluginDir), "/plugin")
-    .WithEnvironment("LIB_DIR", "/plugin")
-    ...
+    .WithRemoteFacade(startup, pluginDir, transport: PluginTransport.Copy)
+    .WithOptions(new OrderBookOptions { Venue = venue })
+    .Build();
 ```
 
-Pinned to the MINOR version deliberately. Composition-root hosting arrived in
-1.1; pinning to `1` would silently accept a future 1.x this demo has not been
-checked against.
+Pinned exactly, not to `3`: this demo shows behaviour from specific releases,
+and floating on a major would silently accept a version it has never been run
+against.
+
+`PluginTransport.Copy` rather than a bind mount, deliberately. A bind mount
+names a path on the Docker **host**, so it breaks the moment the test itself
+runs in a container — which is exactly what a containerised CI runner does. The
+container would get an empty directory and fail with "assembly not found",
+naming the file but not the reason.
+
+The extensions come from **`RemoteFacade.Testcontainers`**, a separate package
+from `RemoteFacade.Client` so the client stays free of any container
+dependency. Reference both: NuGet does not flow build assets through a
+transitive dependency, and the client ships the MSBuild target below.
 
 ## Where the code lives
 
@@ -159,13 +193,13 @@ keeps the loop fast and needs no image of your own. In production you may prefer
 to bake the application in:
 
 ```dockerfile
-FROM ghcr.io/drewlane-dev/remote-facade-host:2.0.0
+FROM ghcr.io/drewlane-dev/remote-facade-host:3.2.0
 COPY publish/ /plugin/
 ENV LIB_DIR=/plugin \
     LIB_ASSEMBLY=OrderBook.dll \
     LIB_REGISTRAR=OrderBook.DemoStartup.Configure
 ```
 
-Then the fixture references your image and drops the resource mapping and the
-environment loop entirely. The trade is a build step per change against a
+Then the fixture references your image and drops the plugin transport
+entirely. The trade is a build step per change against a
 self-contained artifact you can push to a registry.

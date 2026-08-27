@@ -8,10 +8,10 @@ namespace OrderBook;
 /// <summary>
 /// The composition root — the whole configuration story, in C#.
 ///
-/// This is the piece that replaces LIB_TYPE, LIB_OPTIONS and LIB_SERVICES. The
-/// container is told only where to find this method (LIB_ASSEMBLY +
+/// The container is told only where to find this method (LIB_ASSEMBLY +
 /// LIB_REGISTRAR); everything about how the graph is built lives here, where
-/// the compiler checks it.
+/// the compiler checks it. Since v3 this is the ONLY way to host: there is no
+/// single-class mode and no JSON options blob.
 ///
 /// A factory registration handles ANY constructor shape — strings, ints,
 /// records, optional parameters. That is why there is no environment variable
@@ -28,9 +28,18 @@ public static class DemoStartup
     /// </summary>
     public static void Configure(IServiceCollection services)
     {
-        // Options: no LIB_OPTIONS JSON, just an object.
-        services.AddSingleton<IOptions<OrderBookOptions>>(
-            Options.Create(new OrderBookOptions { Venue = "LSE" }));
+        // Options come FROM THE TEST, not from a literal here. The fixture
+        // writes them with WithOptions(new OrderBookOptions { ... }) and this
+        // binds them back; the type is the only shared symbol, so renaming a
+        // property breaks both ends at compile time.
+        //
+        // BindOptions rather than a hardcoded Options.Create, because a value
+        // baked in here cannot vary per container -- and two containers with
+        // DIFFERENT configuration is the thing worth demonstrating.
+        //
+        // A missing section is a startup failure, not a silent default: pass
+        // optional: true if you would rather accept OrderBookOptions' own.
+        services.BindOptions<OrderBookOptions>();
 
         // The production clock. A test that wants a predictable timestamp edits
         // THIS line — see FixedClockStartup below for the substituted variant.
@@ -67,10 +76,13 @@ public static class FixedClockStartup
 }
 
 /// <summary>
-/// A fake living in the application assembly. It could equally be a Moq mock
-/// served back to the test process over LIB_CALLBACKS — that mechanism still
-/// exists and is the right choice when you need Verify(). A fake is simpler and
-/// has no network in the path, so it is the better default.
+/// A fake living in the application assembly, which is how a dependency is
+/// substituted: write another startup and point a container at it.
+///
+/// (v2 could also proxy an interface back to the test process so a Moq mock
+/// could serve it. That was removed in v3 and preserved on the host repo's
+/// `callbacks` branch. A fake has no network in the path and was always the
+/// better default anyway.)
 /// </summary>
 public sealed class FixedClock(string iso) : IClock
 {

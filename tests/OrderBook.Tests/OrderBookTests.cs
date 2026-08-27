@@ -24,8 +24,8 @@ public class OrderBookTests(OrderBookFixture fixture)
 
         var reference = await book.PlaceAsync("VOD", 100);
 
-        // "LSE" comes from OrderBookOptions, set in DemoStartup — in C#, not in
-        // a LIB_OPTIONS environment variable.
+        // "LSE" was pushed in BY THE FIXTURE as a typed OrderBookOptions, not
+        // baked into the startup and not spelled as an environment variable.
         Assert.StartsWith("LSE-", reference);
     }
 
@@ -111,7 +111,33 @@ public class OrderBookTests(OrderBookFixture fixture)
     }
 
     /// <summary>
-    /// 6. An exception keeps its message across the boundary.
+    /// 6. Two containers, two configurations, from one startup.
+    ///
+    /// This is what typed options buy that a literal in Configure() cannot: the
+    /// value varies per container, so one startup serves both. The fixture
+    /// writes OrderBookOptions objects; the startup binds them with
+    /// BindOptions&lt;T&gt;() and never knows a test chose them.
+    ///
+    /// The assertion is deliberately on BOTH hosts. Checking only the second
+    /// would pass if every container somehow got XETRA, which would mean the
+    /// options were not per-container at all.
+    /// </summary>
+    [Fact]
+    public async Task Each_container_gets_its_own_configuration()
+    {
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? string.Empty);
+        await fixture.Host.ResetAsync();
+        await fixture.FixedClockHost.ResetAsync();
+
+        var primary = await fixture.Host.GetAsync<IOrderBook>();
+        var secondary = await fixture.FixedClockHost.GetAsync<IOrderBook>();
+
+        Assert.StartsWith("LSE-", await primary.PlaceAsync("VOD", 1));
+        Assert.StartsWith("XETRA-", await secondary.PlaceAsync("VOD", 1));
+    }
+
+    /// <summary>
+    /// 7. An exception keeps its message across the boundary.
     ///
     /// Without this, a remote failure would look like a transport error and the
     /// real cause would be lost.
@@ -131,7 +157,7 @@ public class OrderBookTests(OrderBookFixture fixture)
     }
 
     /// <summary>
-    /// 7. ResetAsync rebuilds the whole graph — no new container.
+    /// 8. ResetAsync rebuilds the whole graph — no new container.
     ///
     /// This is what makes per-test isolation cheap: a fresh object graph costs a
     /// provider rebuild rather than a container start. Note what it does NOT
@@ -156,7 +182,7 @@ public class OrderBookTests(OrderBookFixture fixture)
     }
 
     /// <summary>
-    /// 8. Asking for something the startup did not register fails at GetAsync,
+    /// 9. Asking for something the startup did not register fails at GetAsync,
     /// naming what IS registered — not later, at a confusing call site.
     /// </summary>
     [Fact]

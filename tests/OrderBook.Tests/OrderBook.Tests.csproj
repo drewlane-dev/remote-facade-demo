@@ -28,7 +28,14 @@
       Because the startup and facade live here, the fixture points the container
       at this project's own output directory instead.
     -->
-    <PackageReference Include="RemoteFacade.Client" Version="2.0.0" />
+    <PackageReference Include="RemoteFacade.Client" Version="3.2.0" />
+    <!--
+      The Testcontainers extensions. A separate package so RemoteFacade.Client
+      stays free of any container dependency; referenced alongside it, not
+      instead of it, because NuGet does not flow BUILD assets transitively and
+      the client ships an MSBuild target.
+    -->
+    <PackageReference Include="RemoteFacade.Testcontainers" Version="3.2.0" />
   </ItemGroup>
 
 </Project>
