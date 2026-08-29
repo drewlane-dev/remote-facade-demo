@@ -40,6 +40,14 @@ jobs:
       MAX_PARALLEL: default=2,e2e=1
     steps:
       - uses: actions/checkout@v5
+
+      # Best-effort: a miss just falls back to balancing by test count, which
+      # is why nothing here fails when the cache is cold.
+      - uses: actions/cache/restore@v4
+        with:
+          path: timings.json
+          key: timings-${{ github.run_id }}
+          restore-keys: timings-
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
@@ -53,7 +61,8 @@ jobs:
           set -euo pipefail
           MATRIX="$(./scripts/suites.py \
             tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
-            --max-parallel "$MAX_PARALLEL")"
+            --max-parallel "$MAX_PARALLEL" \
+            --timings timings.json)"
           echo "$MATRIX"
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
@@ -83,13 +92,16 @@ jobs:
           dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
           tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
             ${{ matrix.leg.args }} \
-            -trx "${{ matrix.leg.name }}.trx"
+            -trx "${{ matrix.leg.name }}.trx" \
+            -xml "${{ matrix.leg.name }}.xml"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: trx-${{ matrix.leg.name }}
-          path: '*.trx'
+          name: results-${{ matrix.leg.name }}
+          path: |
+            *.trx
+            *.xml
           if-no-files-found: error
 
   e2e:
@@ -119,11 +131,50 @@ jobs:
           dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
           tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
             ${{ matrix.leg.args }} \
-            -trx "${{ matrix.leg.name }}.trx"
+            -trx "${{ matrix.leg.name }}.trx" \
+            -xml "${{ matrix.leg.name }}.xml"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: trx-${{ matrix.leg.name }}
-          path: '*.trx'
+          name: results-${{ matrix.leg.name }}
+          path: |
+            *.trx
+            *.xml
           if-no-files-found: error
+
+  timings:
+    name: Record timings
+    needs: [integration, e2e]
+    # Always: a failing leg still produces timings for the ones that ran, and
+    # losing them would make the next run's balancing worse precisely when the
+    # suite is already unhappy.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: timings.json
+          key: timings-${{ github.run_id }}
+          restore-keys: timings-
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          merge-multiple: true
+
+      # An exponentially weighted average, so a class that gets slower shows up
+      # within a few runs rather than being diluted by history.
+      - name: Fold this run into the rolling averages
+        run: ./scripts/timings.py timings.json *.xml
+
+      - run: cat timings.json
+
+      # Keyed by run id and restored by prefix, so every run reads the most
+      # recent entry and writes a new one. GitHub evicts the old ones.
+      - uses: actions/cache/save@v4
+        with:
+          path: timings.json
+          key: timings-${{ github.run_id }}

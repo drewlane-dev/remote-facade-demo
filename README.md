@@ -262,6 +262,36 @@ both packed together. Splitting them cost an extra runner and saved nothing.
 The rule of thumb: split by class where the fixture is cheap, pack where it is
 expensive. That is why this repo runs `default=2,e2e=1`.
 
+### Balancing by measured runtime
+
+Each leg writes xUnit XML; a final job folds it into a rolling `timings.json`
+(exponentially weighted, so a class that gets slower shows up within a few runs)
+and caches it. The next run balances by recorded runtime instead of test count.
+
+The subtlety is that **a leg has two costs**, and only one is per-class:
+
+```
+leg cost  ≈  fixture setup (once per leg)  +  Σ test time of its classes
+```
+
+Measured here, the fixture is **94–99%** of a leg:
+
+```
+integration leg:  5.8s wall |  0.07s test time |  5.7s fixture
+e2e leg:         11.8s wall |  0.70s test time | 11.1s fixture
+```
+
+So weighting by test time alone would balance the remaining few percent. The
+script reports what a split actually buys:
+
+```
+e2e: 2 leg(s), slowest ~11.7s (fixture 11.2s + tests)
+    vs 1 leg at ~11.9s: saves 0.2s for 1 extra runner(s) — probably not worth it
+```
+
+A class with no history is weighted at the **median** of the known ones, not
+zero — zero would make every new class look free and pile them onto one leg.
+
 Each leg builds its own containers; Testcontainers randomises names, networks
 and host ports, so nothing needs coordinating between runners. The same script
 serves Azure DevOps with `--ado`, which wants a flat matrix object rather than

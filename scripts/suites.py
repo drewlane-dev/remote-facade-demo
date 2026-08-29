@@ -15,10 +15,17 @@ and produced matrix legs named "(64-bit" and "xUnit.net". Asking for JSON
 removes the guessing rather than improving it.
 
 Usage:
-    suites.py <exe> [--max-parallel SPEC] [--ado]
+    suites.py <exe> [--max-parallel SPEC] [--timings FILE] [--ado]
 
     SPEC is "default=3" or "default=3,e2e=1" -- a cap on legs PER SUITE.
     Omitted, every class gets its own leg.
+
+With --timings, classes are weighted by their recorded runtime instead of by
+test count, and the predicted cost of each leg is reported. That report is the
+point as much as the balancing: a leg costs `fixture setup + the test time of
+its classes`, and measured here the fixture is 94-99% of it -- so splitting a
+suite often buys almost nothing for double the runners, and the numbers say so
+rather than leaving it to be guessed.
 
 Packing matters more than it looks. Classes on one leg run in a single process,
 so classes sharing a collection share ONE fixture -- which is the cost that
@@ -27,6 +34,7 @@ containers per leg: measured on this repo, two e2e legs took 95s and 91s where
 almost all of it was setup, against ~95s for both together.
 """
 import json
+import os
 import subprocess
 import sys
 from collections import defaultdict
@@ -51,22 +59,48 @@ def parse_caps(spec):
     return caps
 
 
-def pack(classes, cap):
-    """Greedy longest-first bin packing: biggest classes placed first, each into
-    the lightest leg so far. Balances better than round-robin when class sizes
+def pack(weights, cap):
+    """Greedy longest-first bin packing: heaviest classes placed first, each into
+    the lightest leg so far. Balances better than round-robin when class costs
     differ, which they usually do."""
-    if cap is None or cap >= len(classes):
-        return [[c] for c, _ in sorted(classes.items())]
+    if cap is None or cap >= len(weights):
+        return [[c] for c in sorted(weights)]
 
     legs = [[] for _ in range(max(1, cap))]
-    weights = [0] * len(legs)
+    load = [0.0] * len(legs)
 
-    for name, count in sorted(classes.items(), key=lambda kv: (-kv[1], kv[0])):
-        i = weights.index(min(weights))
+    for name, w in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0])):
+        i = load.index(min(load))
         legs[i].append(name)
-        weights[i] += count
+        load[i] += w
 
     return [sorted(leg) for leg in legs if leg]
+
+
+def report(suite, legs, weights, fixture):
+    """What the split actually buys, on stderr so it never pollutes the matrix.
+
+    A leg costs `fixture + the test time of its classes`. The fixture is paid
+    once per leg regardless, so adding legs shortens only the test-time term --
+    and when that term is small, more runners buy almost nothing."""
+    if fixture is None:
+        print(f"  {suite}: {len(legs)} leg(s) — no timing data, balanced by test count",
+              file=sys.stderr)
+        return
+
+    costs = [fixture + sum(weights.get(c, 0.0) for c in leg) for leg in legs]
+    total_tests = sum(weights.values())
+    one_leg = fixture + total_tests
+
+    print(f"  {suite}: {len(legs)} leg(s), slowest ~{max(costs):.1f}s "
+          f"(fixture {fixture:.1f}s + tests)", file=sys.stderr)
+
+    if len(legs) > 1:
+        saved = one_leg - max(costs)
+        extra = len(legs) - 1
+        verdict = "worth it" if saved > fixture * 0.25 else "probably not worth it"
+        print(f"      vs 1 leg at ~{one_leg:.1f}s: saves {saved:.1f}s for {extra} "
+              f"extra runner(s) — {verdict}", file=sys.stderr)
 
 
 def main():
@@ -79,6 +113,15 @@ def main():
     caps = {}
     if "--max-parallel" in args:
         caps = parse_caps(args[args.index("--max-parallel") + 1])
+
+    timings = {"classes": {}, "fixtures": {}}
+    if "--timings" in args:
+        path = args[args.index("--timings") + 1]
+        if os.path.exists(path):
+            with open(path) as f:
+                timings.update(json.load(f))
+        else:
+            print(f"  no timings at {path}; falling back to test counts", file=sys.stderr)
 
     suite_names = listing(exe, "traits").get("Suite", [])
     if not suite_names:
@@ -112,7 +155,21 @@ def main():
     result = {}
     for suite in sorted(suite_names):
         cap = caps.get(suite, caps.get("default"))
-        legs = pack(by_suite[suite], cap)
+
+        # Recorded runtime where we have it, test count where we do not. A new
+        # class with no history gets the MEDIAN of the known ones rather than
+        # zero -- zero would make every new class look free and pile them all
+        # onto one leg.
+        known = [timings["classes"][c] for c in by_suite[suite] if c in timings["classes"]]
+        default_weight = sorted(known)[len(known) // 2] if known else None
+
+        weights = {
+            c: timings["classes"].get(c, default_weight if default_weight is not None else count)
+            for c, count in by_suite[suite].items()
+        }
+
+        legs = pack(weights, cap)
+        report(suite, legs, weights, timings["fixtures"].get(suite))
         result[suite] = [
             {
                 "name": f"{suite}-{i + 1}",

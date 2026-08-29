@@ -1,3 +1,4 @@
+TestResults/
 bin/
 obj/
-TestResults/
+timings.json
