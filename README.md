@@ -87,6 +87,50 @@ both ends at compile time — and because the value is per container, one startu
 serves two differently-configured instances. A section the fixture never set is
 a startup failure, not a silent default.
 
+## Browser tests, with the browser in a container too
+
+`WebUiFixture` starts three containers and drives them with Playwright:
+
+```
+facade   the real OrderBook graph, hosted by remote-facade-host
+web      a small UI that calls it, built from this repo at run time
+browser  Playwright's server, so nothing is installed on your machine
+```
+
+The UI declares **its own** narrow view of the domain:
+
+```csharp
+namespace OrderBook;
+
+public interface IOrderBook
+{
+    Task<string> PlaceAsync(string symbol, int quantity);
+    int Count();
+}
+```
+
+It shares no assembly with the container. `RemoteHost` resolves a service by
+`typeof(T).FullName`, so what binds the two sides is the interface's **name and
+shape**, not a common reference — which lets a front end declare exactly the
+operations it calls and nothing else. That is the Remote Facade idea applied
+properly, and it is why the namespace matters as much as the type name.
+
+What makes these more than ordinary Playwright tests is that the test reaches
+**the same facade the UI talks to**:
+
+```csharp
+await page.GetByTestId("place").ClickAsync();
+await Assertions.Expect(page.GetByTestId("reference")).ToContainTextAsync("LSE-");
+
+var book = await fixture.Facade.GetAsync<IOrderBook>();
+Assert.Equal(1, book.Count());          // domain state, not rendered HTML
+```
+
+A page can show the right text for the wrong reason. The object graph cannot.
+`ResetAsync()` between tests gives each one an empty order book without
+restarting anything — and the UI's proxies survive it, because they hold the
+service name rather than an instance.
+
 ## What each test demonstrates
 
 | Test | Point |
@@ -95,6 +139,9 @@ a startup failure, not a silent default.
 | `A_record_round_trips` | Data crosses cleanly |
 | `A_synchronous_method_works_unchanged` | No reshaping needed; `int`, not `Task<int>` |
 | `Each_container_gets_its_own_configuration` | Typed options, per container, from one startup |
+| `Clicking_place_puts_a_real_order_in_the_container` | A browser click reaching the real domain graph |
+| `The_refresh_button_updates_without_a_navigation` | Playwright waiting on dynamic content |
+| `A_domain_rejection_is_rendered_with_the_domain_s_own_message` | An exception surviving three hops to the page |
 | `Two_facades_share_one_object_graph` | One container, one graph, two surfaces |
 | `A_second_startup_substitutes_a_dependency` | Substitution = another startup, in C# |
 | `An_exception_survives_the_boundary` | Failures keep their message |
