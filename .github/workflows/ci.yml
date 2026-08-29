@@ -1,32 +1,111 @@
 name: ci
 
-# This demo is the thing people copy, so it going stale is a real cost -- it sat
-# two majors behind for weeks with nothing to notice. Running it against the
-# PUBLISHED image and packages means a release that breaks a consumer breaks
-# this build too.
+# Two layers, each fanning out over its own runners.
+#
+#   integration — the backend alone, driven through the facade
+#   e2e         — the same backend with a web app and a browser in front
+#
+# They are separate stages rather than more legs of one because they cost
+# different amounts to START. With container fixtures the wall-clock is
+# dominated by bringing the environment up, so splitting evenly by test count
+# would have every runner pay the same setup for a fraction of the work.
+#
+# Nothing here lists the classes. scripts/suites.sh reads them out of the built
+# assembly and refuses to emit a matrix at all if a class belongs to no suite --
+# because a class that runs on no runner is indistinguishable from one that
+# passes.
 on:
   push:
     branches: [main]
   pull_request:
-  # Weekly, because the failure mode here is not a commit: it is a new host
-  # release changing something this demo relies on. Nothing would push to this
-  # repo to reveal that.
   schedule:
+    # The failure mode here is not a commit: it is a new host release changing
+    # something this demo relies on, and nothing would push here to reveal it.
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
 jobs:
-  test:
+  discover:
+    name: Discover suites
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.suites.outputs.matrix }}
     steps:
       - uses: actions/checkout@v5
-
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
-      # Pulls ghcr.io/drewlane-dev/remote-facade-host and restores
-      # RemoteFacade.Client / RemoteFacade.Testcontainers from nuget.org, both
-      # at the versions this demo pins. Nothing here builds the host.
-      - name: Test
-        run: dotnet test tests/OrderBook.Tests/OrderBook.Tests.csproj
+      - run: dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
+        name: Build tests
+
+      - id: suites
+        name: Enumerate suites (fails if a class has no suite)
+        run: |
+          set -euo pipefail
+          MATRIX="$(./scripts/suites.sh tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests)"
+          echo "$MATRIX"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  integration:
+    name: integration / ${{ matrix.klass }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      # Every leg reports. Stopping the others on one failure hides whether the
+      # problem is one class or the shared environment.
+      fail-fast: false
+      matrix:
+        klass: ${{ fromJSON(needs.discover.outputs.matrix).integration }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run ${{ matrix.klass }}
+        run: |
+          set -euo pipefail
+          dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
+          tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
+            -class "${{ matrix.klass }}" \
+            -trx "${{ matrix.klass }}.trx"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trx-integration-${{ matrix.klass }}
+          path: '*.trx'
+          if-no-files-found: error
+
+  e2e:
+    name: e2e / ${{ matrix.klass }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        klass: ${{ fromJSON(needs.discover.outputs.matrix).e2e }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # Each leg builds its OWN facade, web app and browser. Testcontainers
+      # randomises names, networks and host ports, so nothing needs coordinating
+      # between runners -- the isolation is a property of the fixtures.
+      - name: Run ${{ matrix.klass }}
+        run: |
+          set -euo pipefail
+          dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
+          tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
+            -class "${{ matrix.klass }}" \
+            -trx "${{ matrix.klass }}.trx"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trx-e2e-${{ matrix.klass }}
+          path: '*.trx'
+          if-no-files-found: error

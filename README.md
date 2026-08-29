@@ -198,45 +198,54 @@ from `RemoteFacade.Client` so the client stays free of any container
 dependency. Reference both: NuGet does not flow build assets through a
 transitive dependency, and the client ships the MSBuild target below.
 
-## Running suites in parallel
+## Two test layers, fanned out over runners
 
-Tests are grouped into **suites** — sets that can run on their own agent, in
-their own containers, with no shared state:
+Tests are grouped into **suites** — environments that can run on their own
+runner, in their own containers, with no shared state:
+
+| Suite | What it starts | What belongs there |
+|---|---|---|
+| `integration` | one facade container | behaviour: it is faster, its failures point at one component, and it can assert things a page never shows |
+| `e2e` | facade + web app + browser | only what a browser can prove: rendering, navigation, script |
+
+Both layers use **one definition of the backend** ([`Backend.cs`](tests/OrderBook.Tests/Backend.cs)),
+so they cannot drift on image tag, options or plugin transport — and an e2e
+failure therefore tells you the UI is wrong rather than the environment.
+
+The boundary between them is the **fixture, not the test count**. With container
+fixtures the wall-clock is dominated by starting the environment, so an even
+split by test count would have every runner pay the same setup for a fraction
+of the work.
 
 ```csharp
-[Trait(Suites.Name, Suites.WebUi)]
+[Trait(Suites.Name, Suites.E2E)]
 [Collection(WebUiCollection.Name)]
-public class WebUiTests { ... }
+public class NavigationTests { ... }
 ```
 
-The boundary is the **fixture, not the test count**. With container fixtures the
-wall-clock cost is dominated by starting the environment, so an even split by
-test count would have every agent pay the same setup for a fraction of the work.
-`domain` needs one facade container; `web-ui` needs a facade, a web app and a
-browser.
-
-[`azure-pipelines.yml`](azure-pipelines.yml) discovers them from the **built
-assembly** and fans out one agent per suite:
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) discovers them from the
+**built assembly** and fans each stage out over its classes:
 
 ```bash
 scripts/suites.sh <test-exe>
-# {"domain": {"SUITE": "domain"}, "web-ui": {"SUITE": "web-ui"}}
+# {"e2e": ["...NavigationTests", "...OrderPlacementTests"],
+#  "integration": ["...GraphTests", "...ProtocolTests"]}
 ```
 
-Nothing lists the suites in YAML. A hand-maintained matrix drifts the moment
+Nothing lists the classes in YAML. A hand-maintained matrix drifts the moment
 someone adds a test class, and it drifts *silently* — the class runs on no
-agent, every leg stays green, and nothing reports that coverage shrank. So the
-script **fails rather than emitting a matrix** when a class belongs to no suite:
+runner, every leg stays green, and nothing reports that coverage shrank. So the
+script **fails rather than emitting a matrix**:
 
 ```
-These test classes declare no [Trait(Suites.Name, ...)], so no agent would run them:
+These test classes declare no [Trait(Suites.Name, ...)], so no runner would take them:
   OrderBook.Tests.OrphanProbeTests
 ```
 
-Each leg writes its own TRX and ADO aggregates them into one test run — the
-merge step Playwright's Node runner needs blob reports for. Testcontainers
-randomises names, networks and host ports, so nothing needs coordinating
-between agents.
+Each leg builds its own containers; Testcontainers randomises names, networks
+and host ports, so nothing needs coordinating between runners. The same script
+serves Azure DevOps with `--ado`, which wants a flat matrix object rather than
+per-stage arrays.
 
 ## Where the code lives
 

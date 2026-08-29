@@ -35,7 +35,7 @@ stages:
           - script: |
               set -eu
               EXE=tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests
-              MATRIX="$(./scripts/suites.sh "$EXE")"
+              MATRIX="$(./scripts/suites.sh "$EXE" --ado)"
               echo "matrix: $MATRIX"
               echo "##vso[task.setvariable variable=matrix;isOutput=true]$MATRIX"
             name: emit
@@ -69,18 +69,18 @@ stages:
               set -eu
               dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
               tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
-                -trait "Suite=$(SUITE)" \
-                -trx "$(SUITE).trx"
-            displayName: Run $(SUITE)
+                -class "$(CLASS)" \
+                -trx "$(CLASS).trx"
+            displayName: Run $(SUITE) / $(CLASS)
 
           # ADO aggregates TRX from every leg into one test run, which is the
           # merge step Playwright's Node runner needs blob reports for.
           - task: PublishTestResults@2
             condition: succeededOrFailed()
-            displayName: Publish $(SUITE) results
+            displayName: Publish $(CLASS) results
             inputs:
               testResultsFormat: VSTest
-              testResultsFiles: '$(SUITE).trx'
+              testResultsFiles: '$(CLASS).trx'
               searchFolder: '$(Build.SourcesDirectory)'
-              testRunTitle: '$(SUITE)'
+              testRunTitle: '$(SUITE) / $(CLASS)'
               failTaskOnFailedTests: true

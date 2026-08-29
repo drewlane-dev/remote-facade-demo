@@ -18,9 +18,18 @@ public static class Suites
 {
     public const string Name = "Suite";
 
-    /// <summary>One facade container. Fast.</summary>
-    public const string Domain = "domain";
+    /// <summary>
+    /// Integration: the backend alone, driven through the facade. No browser,
+    /// no UI. This is where behaviour belongs -- it is faster, its failures
+    /// point at one component, and it can assert things a page never shows.
+    /// </summary>
+    public const string Integration = "integration";
 
-    /// <summary>Facade + web + browser. Slow, and the only suite needing them.</summary>
-    public const string WebUi = "web-ui";
+    /// <summary>
+    /// End to end: the same backend with a web app and a browser in front.
+    /// Reserve it for what only a browser can prove -- rendering, navigation,
+    /// script. Anything assertable without one belongs in Integration, where
+    /// it costs a fraction as much and fails more precisely.
+    /// </summary>
+    public const string E2E = "e2e";
 }

@@ -21,7 +21,8 @@ public sealed class OrderBookFixture : IAsyncLifetime
     /// specific releases, and floating on a major would silently accept a
     /// version it has never been run against.
     /// </summary>
-    private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:3.2.0";
+    // The image and plugin directory now live in Backend, so both layers
+    // cannot drift apart.
 
     /// <summary>
     /// The venue each container is configured with, pushed in from HERE rather
@@ -105,18 +106,8 @@ public sealed class OrderBookFixture : IAsyncLifetime
     /// </summary>
     private static async Task<IContainer> StartHostAsync(string pluginDir, Type startup, string venue)
     {
-        var container = new ContainerBuilder()
-            .WithImage(HostImage)
-            // Copy, not a bind mount. A bind mount names a path on the Docker
-            // HOST, so it breaks the moment this test runs inside a container
-            // itself -- the container would get an empty directory and fail
-            // with "assembly not found", naming the file but not the reason.
-            .WithRemoteFacade(startup, pluginDir, transport: PluginTransport.Copy)
-            // Typed, not a string. Rename Venue and this stops compiling;
-            // misspell an environment variable and nothing would have.
-            .WithOptions(new OrderBookOptions { Venue = venue })
-            .Build();
-
+        // One definition, shared with the e2e layer. See Backend.
+        var container = Backend.For(startup, venue).Build();
         await container.StartAsync();
         return container;
     }
@@ -126,7 +117,7 @@ public sealed class OrderBookFixture : IAsyncLifetime
     /// name the image rather than letting a raw Docker error through.
     /// </summary>
     private static string Explain(Exception ex) =>
-        $"demo fixture failed to start (image {HostImage}): {ex.Message}";
+        $"demo fixture failed to start (image {Backend.Image}): {ex.Message}";
 
     public async ValueTask DisposeAsync() => await SafeTeardownAsync();
 

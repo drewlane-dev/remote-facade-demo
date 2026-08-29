@@ -2,18 +2,11 @@ using Microsoft.Playwright;
 
 namespace OrderBook.Tests;
 
-/// <summary>
-/// The UI, driven by a real browser, against the real domain graph.
-///
-/// What makes these worth having over ordinary Playwright tests is the last
-/// assertion in each: the test reaches the SAME facade the UI talks to, so it
-/// can check domain state rather than only what was rendered. A page can show
-/// the right text for the wrong reason; the object graph cannot.
-/// </summary>
-[Trait(Suites.Name, Suites.WebUi)]
+[Trait(Suites.Name, Suites.E2E)]
 [Collection(WebUiCollection.Name)]
-public class WebUiTests(WebUiFixture fixture)
+public class OrderPlacementTests(WebUiFixture fixture)
 {
+
     private async Task<IPage> FreshAsync()
     {
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? string.Empty);
@@ -24,16 +17,6 @@ public class WebUiTests(WebUiFixture fixture)
         // hold the service name rather than an instance.
         await fixture.Facade.ResetAsync();
         return await fixture.NewPageAsync();
-    }
-
-    [Fact]
-    public async Task The_page_loads()
-    {
-        var page = await FreshAsync();
-        await page.GotoAsync(fixture.BaseUrl);
-
-        await Assertions.Expect(page.GetByTestId("heading")).ToHaveTextAsync("Orders");
-        await Assertions.Expect(page.GetByTestId("count")).ToHaveTextAsync("0");
     }
 
     [Fact]
@@ -54,20 +37,6 @@ public class WebUiTests(WebUiFixture fixture)
         // The assertion the browser cannot make. Same graph, asked directly.
         var book = await fixture.Facade.GetAsync<IOrderBook>();
         Assert.Equal(1, book.Count());
-    }
-
-    [Fact]
-    public async Task Navigation_between_pages_works()
-    {
-        var page = await FreshAsync();
-        await page.GotoAsync(fixture.BaseUrl);
-
-        await page.GetByTestId("nav-audit").ClickAsync();
-        await Assertions.Expect(page.GetByTestId("heading")).ToHaveTextAsync("Audit");
-        await Assertions.Expect(page.GetByTestId("empty")).ToBeVisibleAsync();
-
-        await page.GetByTestId("nav-orders").ClickAsync();
-        await Assertions.Expect(page.GetByTestId("heading")).ToHaveTextAsync("Orders");
     }
 
     [Fact]

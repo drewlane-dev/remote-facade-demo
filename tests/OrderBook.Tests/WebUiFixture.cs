@@ -20,8 +20,6 @@ namespace OrderBook.Tests;
 /// </summary>
 public sealed class WebUiFixture : IAsyncLifetime
 {
-    private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:3.2.0";
-
     // Must match the Microsoft.Playwright package version exactly.
     private const string PlaywrightImage = "mcr.microsoft.com/playwright:v1.62.0-noble";
     private const string PlaywrightVersion = "1.62.0";
@@ -79,12 +77,11 @@ public sealed class WebUiFixture : IAsyncLifetime
     private async Task StartAsync()
     {
 
-        var plugin = AppContext.BaseDirectory;
-
-        _facade = new ContainerBuilder()
-            .WithImage(HostImage)
-            .WithRemoteFacade(typeof(DemoStartup), plugin, transport: PluginTransport.Copy)
-            .WithOptions(new OrderBookOptions { Venue = "LSE" })
+        // The SAME backend the integration layer runs, with a network attached
+        // so the web app can reach it by alias. Defining it here instead would
+        // let the two layers drift, and then an e2e failure would not say
+        // whether the UI or the environment was at fault.
+        _facade = Backend.For(typeof(DemoStartup), "LSE")
             .WithNetwork(_network)
             .WithNetworkAliases("facade")
             .Build();
