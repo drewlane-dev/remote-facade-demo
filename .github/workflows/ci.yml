@@ -10,7 +10,7 @@ name: ci
 # dominated by bringing the environment up, so splitting evenly by test count
 # would have every runner pay the same setup for a fraction of the work.
 #
-# Nothing here lists the classes. scripts/suites.sh reads them out of the built
+# Nothing here lists the classes. scripts/suites.py reads them out of the built
 # assembly and refuses to emit a matrix at all if a class belongs to no suite --
 # because a class that runs on no runner is indistinguishable from one that
 # passes.
@@ -43,7 +43,7 @@ jobs:
         name: Enumerate suites (fails if a class has no suite)
         run: |
           set -euo pipefail
-          MATRIX="$(./scripts/suites.sh tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests)"
+          MATRIX="$(./scripts/suites.py tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests)"
           echo "$MATRIX"
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 

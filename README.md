@@ -227,7 +227,7 @@ public class NavigationTests { ... }
 **built assembly** and fans each stage out over its classes:
 
 ```bash
-scripts/suites.sh <test-exe>
+scripts/suites.py <test-exe>
 # {"e2e": ["...NavigationTests", "...OrderPlacementTests"],
 #  "integration": ["...GraphTests", "...ProtocolTests"]}
 ```
