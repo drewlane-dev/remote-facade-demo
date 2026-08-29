@@ -10,6 +10,7 @@ namespace OrderBook.Tests;
 /// can check domain state rather than only what was rendered. A page can show
 /// the right text for the wrong reason; the object graph cannot.
 /// </summary>
+[Trait(Suites.Name, Suites.WebUi)]
 [Collection(WebUiCollection.Name)]
 public class WebUiTests(WebUiFixture fixture)
 {

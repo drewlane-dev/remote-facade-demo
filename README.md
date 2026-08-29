@@ -198,6 +198,46 @@ from `RemoteFacade.Client` so the client stays free of any container
 dependency. Reference both: NuGet does not flow build assets through a
 transitive dependency, and the client ships the MSBuild target below.
 
+## Running suites in parallel
+
+Tests are grouped into **suites** — sets that can run on their own agent, in
+their own containers, with no shared state:
+
+```csharp
+[Trait(Suites.Name, Suites.WebUi)]
+[Collection(WebUiCollection.Name)]
+public class WebUiTests { ... }
+```
+
+The boundary is the **fixture, not the test count**. With container fixtures the
+wall-clock cost is dominated by starting the environment, so an even split by
+test count would have every agent pay the same setup for a fraction of the work.
+`domain` needs one facade container; `web-ui` needs a facade, a web app and a
+browser.
+
+[`azure-pipelines.yml`](azure-pipelines.yml) discovers them from the **built
+assembly** and fans out one agent per suite:
+
+```bash
+scripts/suites.sh <test-exe>
+# {"domain": {"SUITE": "domain"}, "web-ui": {"SUITE": "web-ui"}}
+```
+
+Nothing lists the suites in YAML. A hand-maintained matrix drifts the moment
+someone adds a test class, and it drifts *silently* — the class runs on no
+agent, every leg stays green, and nothing reports that coverage shrank. So the
+script **fails rather than emitting a matrix** when a class belongs to no suite:
+
+```
+These test classes declare no [Trait(Suites.Name, ...)], so no agent would run them:
+  OrderBook.Tests.OrphanProbeTests
+```
+
+Each leg writes its own TRX and ADO aggregates them into one test run — the
+merge step Playwright's Node runner needs blob reports for. Testcontainers
+randomises names, networks and host ports, so nothing needs coordinating
+between agents.
+
 ## Where the code lives
 
 Everything here — the application, the startup, the facade and the tests — is in

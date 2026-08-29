@@ -10,6 +10,7 @@ namespace OrderBook.Tests;
 /// DemoStartup, running inside a container — not a mock, not an in-process
 /// object. The only thing the test holds is the facade interface.
 /// </summary>
+[Trait(Suites.Name, Suites.Domain)]
 [Collection(OrderBookCollection.Name)]
 public class OrderBookTests(OrderBookFixture fixture)
 {

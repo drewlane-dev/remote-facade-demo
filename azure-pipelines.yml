@@ -1,0 +1,86 @@
+# Suites discovered from the built assembly, then run one per agent.
+#
+# The matrix is NOT written here. A hand-maintained list drifts the moment
+# someone adds a test class, and it drifts silently: the class runs on no agent,
+# every leg stays green, and nothing reports that coverage shrank. scripts/suites.sh
+# reads the suites out of the compiled tests and refuses to emit a matrix at all
+# if any class belongs to none.
+
+trigger:
+  branches:
+    include: [main]
+
+pr:
+  branches:
+    include: [main]
+
+stages:
+  - stage: discover
+    displayName: Discover suites
+    jobs:
+      - job: suites
+        displayName: Enumerate parallelisable suites
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: UseDotNet@2
+            inputs:
+              version: '10.0.x'
+
+          - script: dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
+            displayName: Build tests
+
+          # Publishing the matrix as an output variable is what lets the next
+          # stage fan out over something computed rather than something typed.
+          - script: |
+              set -eu
+              EXE=tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests
+              MATRIX="$(./scripts/suites.sh "$EXE")"
+              echo "matrix: $MATRIX"
+              echo "##vso[task.setvariable variable=matrix;isOutput=true]$MATRIX"
+            name: emit
+            displayName: Build matrix (fails if a class has no suite)
+
+  - stage: test
+    displayName: Run suites in parallel
+    dependsOn: discover
+    jobs:
+      - job: suite
+        displayName: Suite
+        # One agent per suite, each building its own containers. Testcontainers
+        # randomises names, networks and host ports, so nothing needs to be
+        # coordinated between agents -- the isolation is a property of the
+        # fixtures, which is why the suite boundary is the fixture boundary.
+        strategy:
+          matrix: $[ stageDependencies.discover.suites.outputs['emit.matrix'] ]
+        pool:
+          vmImage: ubuntu-latest
+        variables:
+          # Each agent pulls the facade, web and browser images cold. This is
+          # usually the largest single cost of a leg, and the reason suites are
+          # split by fixture rather than by test count.
+          DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+        steps:
+          - task: UseDotNet@2
+            inputs:
+              version: '10.0.x'
+
+          - script: |
+              set -eu
+              dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
+              tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
+                -trait "Suite=$(SUITE)" \
+                -trx "$(SUITE).trx"
+            displayName: Run $(SUITE)
+
+          # ADO aggregates TRX from every leg into one test run, which is the
+          # merge step Playwright's Node runner needs blob reports for.
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            displayName: Publish $(SUITE) results
+            inputs:
+              testResultsFormat: VSTest
+              testResultsFiles: '$(SUITE).trx'
+              searchFolder: '$(Build.SourcesDirectory)'
+              testRunTitle: '$(SUITE)'
+              failTaskOnFailedTests: true
