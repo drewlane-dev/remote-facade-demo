@@ -242,6 +242,26 @@ These test classes declare no [Trait(Suites.Name, ...)], so no runner would take
   OrderBook.Tests.OrphanProbeTests
 ```
 
+### Controlling how many runners
+
+`--max-parallel` caps the legs **per suite** and packs classes into them:
+
+```bash
+scripts/suites.py <exe> --max-parallel default=2,e2e=1
+```
+
+Six classes at `default=3` become three legs, balanced by test count — a class
+is never split, so one huge class simply gets its own leg.
+
+Packing is not just about runner count. Classes on one leg run in a **single
+process**, so classes sharing a collection share **one fixture** — which is the
+cost that dominates a container suite. Measured here: the two e2e classes as
+separate legs took 95s and 91s, almost entirely fixture setup, against ~95s for
+both packed together. Splitting them cost an extra runner and saved nothing.
+
+The rule of thumb: split by class where the fixture is cheap, pack where it is
+expensive. That is why this repo runs `default=2,e2e=1`.
+
 Each leg builds its own containers; Testcontainers randomises names, networks
 and host ports, so nothing needs coordinating between runners. The same script
 serves Azure DevOps with `--ado`, which wants a flat matrix object rather than

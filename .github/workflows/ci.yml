@@ -14,6 +14,12 @@ name: ci
 # assembly and refuses to emit a matrix at all if a class belongs to no suite --
 # because a class that runs on no runner is indistinguishable from one that
 # passes.
+#
+# MAX_PARALLEL caps the legs PER SUITE and packs the classes into them. e2e is
+# capped at 1 deliberately: its classes share a collection, so one leg runs them
+# in a single process against ONE set of containers. Split across two legs they
+# each rebuilt a facade, a web app and a browser -- measured at 95s and 91s,
+# almost entirely setup, against ~95s for both together.
 on:
   push:
     branches: [main]
@@ -30,6 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.suites.outputs.matrix }}
+    env:
+      MAX_PARALLEL: default=2,e2e=1
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
@@ -40,15 +48,17 @@ jobs:
         name: Build tests
 
       - id: suites
-        name: Enumerate suites (fails if a class has no suite)
+        name: Enumerate and pack suites (fails if a class has no suite)
         run: |
           set -euo pipefail
-          MATRIX="$(./scripts/suites.py tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests)"
+          MATRIX="$(./scripts/suites.py \
+            tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
+            --max-parallel "$MAX_PARALLEL")"
           echo "$MATRIX"
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
   integration:
-    name: integration / ${{ matrix.klass }}
+    name: ${{ matrix.leg.name }}
     needs: discover
     runs-on: ubuntu-latest
     strategy:
@@ -56,36 +66,40 @@ jobs:
       # problem is one class or the shared environment.
       fail-fast: false
       matrix:
-        klass: ${{ fromJSON(needs.discover.outputs.matrix).integration }}
+        leg: ${{ fromJSON(needs.discover.outputs.matrix).integration }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
-      - name: Run ${{ matrix.klass }}
+      # matrix.leg.args is a ready-made "-class A -class B", so the classes on
+      # one leg run in a SINGLE process and share whatever fixture their
+      # collection defines. Building the arguments here from an array would
+      # lose that.
+      - name: Run ${{ matrix.leg.classes }}
         run: |
           set -euo pipefail
           dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
           tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
-            -class "${{ matrix.klass }}" \
-            -trx "${{ matrix.klass }}.trx"
+            ${{ matrix.leg.args }} \
+            -trx "${{ matrix.leg.name }}.trx"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: trx-integration-${{ matrix.klass }}
+          name: trx-${{ matrix.leg.name }}
           path: '*.trx'
           if-no-files-found: error
 
   e2e:
-    name: e2e / ${{ matrix.klass }}
+    name: ${{ matrix.leg.name }}
     needs: discover
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        klass: ${{ fromJSON(needs.discover.outputs.matrix).e2e }}
+        leg: ${{ fromJSON(needs.discover.outputs.matrix).e2e }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
@@ -95,17 +109,21 @@ jobs:
       # Each leg builds its OWN facade, web app and browser. Testcontainers
       # randomises names, networks and host ports, so nothing needs coordinating
       # between runners -- the isolation is a property of the fixtures.
-      - name: Run ${{ matrix.klass }}
+      # matrix.leg.args is a ready-made "-class A -class B", so the classes on
+      # one leg run in a SINGLE process and share whatever fixture their
+      # collection defines. Building the arguments here from an array would
+      # lose that.
+      - name: Run ${{ matrix.leg.classes }}
         run: |
           set -euo pipefail
           dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
           tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
-            -class "${{ matrix.klass }}" \
-            -trx "${{ matrix.klass }}.trx"
+            ${{ matrix.leg.args }} \
+            -trx "${{ matrix.leg.name }}.trx"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: trx-e2e-${{ matrix.klass }}
+          name: trx-${{ matrix.leg.name }}
           path: '*.trx'
           if-no-files-found: error
