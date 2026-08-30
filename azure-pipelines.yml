@@ -1,11 +1,12 @@
-# Suites discovered from the built assembly, then run one per agent.
+# Suites discovered from the built assemblies, then run one leg per agent.
 #
 # The matrix is NOT written here. A hand-maintained list drifts the moment
 # someone adds a test class, and it drifts silently: the class runs on no agent,
 # every leg stays green, and nothing reports that coverage shrank.
-# scripts/suites.ps1 takes the suites from the .slnf files and the classes from
-# the compiled tests, and refuses to emit a matrix at all if a test project
-# belongs to no filter.
+# scripts/suites.ps1 is called once per suite with that suite's filter, finds
+# the runners inside it by asking MSBuild which projects are
+# IsTestingPlatformApplication, and refuses to emit a matrix for a filter that
+# holds no test project.
 
 trigger:
   branches:
@@ -31,69 +32,52 @@ stages:
           - script: dotnet build OrderBook.slnx -c Release
             displayName: Build tests
 
-          # Publishing the matrix as an output variable is what lets the next
+          # Publishing each matrix as an output variable is what lets the next
           # stage fan out over something computed rather than something typed.
+          #
+          # The cap sits on the call, beside the filter it applies to: e2e is
+          # packed to one leg because its classes share a collection and one
+          # leg runs them against a single set of containers.
           - pwsh: |
-              # Quoted: unquoted, PowerShell reads default=2,e2e=1 as an ARRAY
-              # -- the comma is the array operator -- and it cannot bind to a
-              # [string] parameter. GitHub Actions passes this through an
-              # environment variable, so it is already a string there and the
-              # quoting only matters here.
-              $matrix = ./scripts/suites.ps1 -MaxParallel 'default=2,e2e=1' -Ado
-              Write-Host "matrix: $matrix"
-              Write-Host "##vso[task.setvariable variable=matrix;isOutput=true]$matrix"
-            name: emit
-            displayName: Build matrix (fails if a test project has no filter)
+              $legs = ./scripts/suites.ps1 -Sln integration.slnf -MaxParallel 2 -Ado
+              Write-Host "integration: $legs"
+              Write-Host "##vso[task.setvariable variable=legs;isOutput=true]$legs"
+            name: emitIntegration
+            displayName: Pack the integration suite
+
+          - pwsh: |
+              $legs = ./scripts/suites.ps1 -Sln e2e.slnf -MaxParallel 1 -Ado
+              Write-Host "e2e: $legs"
+              Write-Host "##vso[task.setvariable variable=legs;isOutput=true]$legs"
+            name: emitE2e
+            displayName: Pack the e2e suite
 
   - stage: test
     displayName: Run suites in parallel
     dependsOn: discover
     jobs:
-      - job: suite
-        displayName: Suite
-        # One agent per leg, each building its own containers. Testcontainers
-        # randomises names, networks and host ports, so nothing needs to be
-        # coordinated between agents -- the isolation is a property of the
-        # fixtures, which is why the suite boundary is the fixture boundary.
-        #
-        # Whether the legs actually overlap is the ORGANISATION's business, not
-        # this file's: a private project with no parallel-jobs grant runs them
-        # one after another, and the pipeline is correct either way.
+      # One agent per leg, each building its own containers. Testcontainers
+      # randomises names, networks and host ports, so nothing needs to be
+      # coordinated between agents -- the isolation is a property of the
+      # fixtures, which is why the suite boundary is the fixture boundary.
+      #
+      # Whether the legs actually overlap is the ORGANISATION's business, not
+      # this file's: a private project with no parallel-jobs grant runs them
+      # one after another, and the pipeline is correct either way.
+      - job: integration
+        displayName: Integration
         strategy:
-          matrix: $[ stageDependencies.discover.suites.outputs['emit.matrix'] ]
+          matrix: $[ stageDependencies.discover.suites.outputs['emitIntegration.legs'] ]
         pool:
           vmImage: ubuntu-latest
-        variables:
-          # Each agent pulls the facade, web and browser images cold. This is
-          # usually the largest single cost of a leg, and the reason suites are
-          # split by fixture rather than by test count.
-          DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
         steps:
-          - task: UseDotNet@2
-            inputs:
-              version: '10.0.x'
+          - template: .ado/run-leg.yml
 
-          # SUITE, LEG, EXE and ARGS all come from the matrix, so nothing here
-          # reconstructs them. An earlier version recovered the filter name by
-          # sed-stripping a trailing "-<n>" off Agent.JobName, which for a
-          # matrix job is the DISPLAY name ("Suite integration_1"), not the
-          # matrix key -- it was guessing at a value the matrix already had.
-          - script: |
-              set -eu
-              dotnet build "$(SUITE).slnf" -c Release
-              "$(EXE)" \
-                $(ARGS) \
-                -trx "$(LEG).trx"
-            displayName: Run $(SUITE) / $(CLASSES)
-
-          # ADO aggregates TRX from every leg into one test run, which is the
-          # merge step Playwright's Node runner needs blob reports for.
-          - task: PublishTestResults@2
-            condition: succeededOrFailed()
-            displayName: Publish results
-            inputs:
-              testResultsFormat: VSTest
-              testResultsFiles: '*.trx'
-              searchFolder: '$(Build.SourcesDirectory)'
-              testRunTitle: '$(SUITE) / $(CLASSES)'
-              failTaskOnFailedTests: true
+      - job: e2e
+        displayName: E2E
+        strategy:
+          matrix: $[ stageDependencies.discover.suites.outputs['emitE2e.legs'] ]
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - template: .ado/run-leg.yml

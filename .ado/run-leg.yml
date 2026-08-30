@@ -1,0 +1,34 @@
+# One matrix leg: build that suite's filter, run the classes packed onto this
+# leg, publish the results. Shared by both jobs because the only thing that
+# differs between them is the matrix they came from.
+steps:
+  - task: UseDotNet@2
+    inputs:
+      version: '10.0.x'
+
+  # SUITE, LEG, EXE and ARGS all come from the matrix, so nothing here
+  # reconstructs them. An earlier version recovered the filter name by
+  # sed-stripping a trailing "-<n>" off Agent.JobName, which for a matrix job is
+  # the DISPLAY name ("Suite integration_1"), not the matrix key -- it was
+  # guessing at a value the matrix already had.
+  #
+  # The solution FILTER, not the whole solution: an integration leg has no
+  # reason to build the API or the e2e project.
+  - script: |
+      set -eu
+      dotnet build "$(SUITE).slnf" -c Release
+      "$(EXE)" \
+        $(ARGS) \
+        -trx "$(LEG).trx"
+    displayName: Run $(SUITE) / $(CLASSES)
+
+  # ADO aggregates TRX from every leg into one test run.
+  - task: PublishTestResults@2
+    condition: succeededOrFailed()
+    displayName: Publish results
+    inputs:
+      testResultsFormat: VSTest
+      testResultsFiles: '*.trx'
+      searchFolder: '$(Build.SourcesDirectory)'
+      testRunTitle: '$(SUITE) / $(CLASSES)'
+      failTaskOnFailedTests: true

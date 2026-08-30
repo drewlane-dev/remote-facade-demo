@@ -221,39 +221,39 @@ API references it directly.
 `OrderBook.slnx` holds every project, and `integration.slnf` / `e2e.slnf` are
 solution filters so a runner builds only what its layer needs.
 
-**A suite is a `.slnf`.** Its name is the file's name, and its runners are
-whichever projects in it MSBuild reports as `IsTestingPlatformApplication`:
+**A suite is a `.slnf`**, and CI packs one per call:
 
 ```powershell
-scripts/suites.ps1 -MaxParallel default=2,e2e=1
+scripts/suites.ps1 -Sln integration.slnf -MaxParallel 2
+scripts/suites.ps1 -Sln e2e.slnf         -MaxParallel 1
 ```
 
-So nothing declares which suite anything belongs to — not the test code, not
-the pipeline. The filters are already what each runner builds, so the projects
-that get built and the projects that get run cannot drift apart, and adding a
-suite is adding a `.slnf`.
-
-The runner is asked of MSBuild rather than inferred from a name, because names
-do not discriminate: `e2e.slnf` also contains `OrderBook.Api`, which is also an
-`Exe`, and `OrderBook.Tests.Shared`, which is also called `*Tests`. A filter
-holding no runner is simply not a suite.
-
-Class names come from the runner's own `-list classes/json`, so nothing parses
-source or scrapes text.
-
-`-MaxParallel` caps the legs **per suite**. `e2e=1` is deliberate: its classes
-share a collection, so one leg runs them in a single process against **one** set
-of containers. Split across legs they each rebuild SQL Server, the API, the
+The cap sits beside the filter it applies to, because the two are decided
+together. `e2e` is packed to a single leg deliberately: its classes share a
+collection, so one leg runs them in a single process against **one** set of
+containers. Split across legs they each rebuild SQL Server, the API, the
 Angular host and a browser — which is 94–99% of a leg's wall-clock. Split where
 the fixture is cheap; pack where it is expensive.
 
-The guard watches the **solution**: a test project in no filter is fatal,
-because running on no runner is indistinguishable from passing.
+Which projects inside the filter are runners is asked of MSBuild —
+`IsTestingPlatformApplication`, set by the test SDK — rather than matched by
+name. Names do not discriminate here: `e2e.slnf` also contains `OrderBook.Api`,
+which is also an `Exe`, and `OrderBook.Tests.Shared`, which is also called
+`*Tests`. A name pattern would have to be kept correct by hand as projects are
+added and renamed; this cannot go stale.
+
+The filter is already what each leg builds, so the projects that get built and
+the projects that get run cannot drift apart. Class names come from the
+runner's own `-list classes/json`, so nothing parses source or scrapes text.
+
+A filter holding no test project is fatal, because a suite that runs nothing is
+indistinguishable from one that passes.
 
 ```
-These test projects are in the solution but in no .slnf, so no runner
-would take them:
-  tests/OrderBook.WeirdTests/OrderBook.WeirdTests.csproj
+no project in src-only.slnf is a test project (IsTestingPlatformApplication).
+Projects in it:
+  OrderBook.Domain
+  OrderBook.Api
 ```
 
 ## Where the code lives

@@ -10,19 +10,21 @@ name: ci
 # dominated by bringing the environment up, so splitting evenly by test count
 # would have every runner pay the same setup for a fraction of the work.
 #
-# Nothing here names a project or a class. scripts/suites.ps1 derives the matrix
-# from the .slnf files: a suite IS a filter, and its runners are whichever
-# projects in it MSBuild reports as IsTestingPlatformApplication. The filters
-# are already what the legs below build, so what gets built and what gets run
-# cannot drift apart, and adding a suite is adding a .slnf.
+# Nothing here names a project or a class. scripts/suites.ps1 is called once
+# per suite with that suite's filter, and finds the runners inside it by asking
+# MSBuild which projects are IsTestingPlatformApplication -- not by matching a
+# name, which would have to be kept correct by hand as projects are added and
+# renamed. The filter is already what the legs below build, so what gets built
+# and what gets run cannot drift apart.
 #
-# A test project in the solution but in no filter is fatal rather than silently
-# skipped, because running on no runner is indistinguishable from passing.
+# A filter holding no test project is fatal rather than silently empty, because
+# a suite that runs nothing is indistinguishable from one that passes.
 #
-# MAX_PARALLEL caps the legs PER SUITE. e2e is capped at 1 deliberately: its
-# classes share a collection, so one leg runs them in a single process against
-# ONE set of containers. Split across legs they each rebuild SQL Server, the
-# API, the Angular host and a browser, which is 94-99% of a leg's wall-clock.
+# The cap lives on the call, next to the filter it applies to, because the two
+# are decided together. e2e is capped at 1 deliberately: its classes share a
+# collection, so one leg runs them in a single process against ONE set of
+# containers. Split across legs they each rebuild SQL Server, the API, the
+# Angular host and a browser, which is 94-99% of a leg's wall-clock.
 on:
   push:
     branches: [main]
@@ -38,9 +40,8 @@ jobs:
     name: Discover suites
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.suites.outputs.matrix }}
-    env:
-      MAX_PARALLEL: default=2,e2e=1
+      integration: ${{ steps.integration.outputs.legs }}
+      e2e: ${{ steps.e2e.outputs.legs }}
     steps:
       - uses: actions/checkout@v5
 
@@ -51,13 +52,21 @@ jobs:
       - run: dotnet build OrderBook.slnx -c Release
         name: Build the solution
 
-      - id: suites
-        name: Enumerate and pack suites (fails if a test project has no filter)
+      - id: integration
+        name: Pack the integration suite
         shell: pwsh
         run: |
-          $matrix = ./scripts/suites.ps1 -MaxParallel $env:MAX_PARALLEL
-          $matrix
-          "matrix=$matrix" >> $env:GITHUB_OUTPUT
+          $legs = ./scripts/suites.ps1 -Sln integration.slnf -MaxParallel 2
+          $legs
+          "legs=$legs" >> $env:GITHUB_OUTPUT
+
+      - id: e2e
+        name: Pack the e2e suite
+        shell: pwsh
+        run: |
+          $legs = ./scripts/suites.ps1 -Sln e2e.slnf -MaxParallel 1
+          $legs
+          "legs=$legs" >> $env:GITHUB_OUTPUT
 
   integration:
     name: ${{ matrix.leg.name }}
@@ -68,8 +77,7 @@ jobs:
       # problem is one class or the shared environment.
       fail-fast: false
       matrix:
-        leg: ${{ fromJSON(needs.discover.outputs.matrix).integration }}
-        filter: ["integration.slnf"]
+        leg: ${{ fromJSON(needs.discover.outputs.integration) }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
@@ -86,7 +94,7 @@ jobs:
       - name: Run ${{ matrix.leg.classes }}
         run: |
           set -euo pipefail
-          dotnet build ${{ matrix.filter }} -c Release
+          dotnet build ${{ matrix.leg.suite }}.slnf -c Release
           "${{ matrix.leg.exe }}" \
             ${{ matrix.leg.args }} \
             -trx "${{ matrix.leg.name }}.trx"
@@ -105,8 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: ${{ fromJSON(needs.discover.outputs.matrix).e2e }}
-        filter: ["e2e.slnf"]
+        leg: ${{ fromJSON(needs.discover.outputs.e2e) }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
@@ -126,7 +133,7 @@ jobs:
       - name: Run ${{ matrix.leg.classes }}
         run: |
           set -euo pipefail
-          dotnet build ${{ matrix.filter }} -c Release
+          dotnet build ${{ matrix.leg.suite }}.slnf -c Release
           "${{ matrix.leg.exe }}" \
             ${{ matrix.leg.args }} \
             -trx "${{ matrix.leg.name }}.trx"

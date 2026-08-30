@@ -1,27 +1,27 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Emit a CI matrix from the solution filters.
+    Emit the CI legs for ONE test suite.
 
 .DESCRIPTION
-    A SUITE is a .slnf file. Its name is the file's name, and its runners are
-    whichever projects inside it MSBuild reports as
-    IsTestingPlatformApplication.
+    Given a solution or solution filter, this finds the test projects inside
+    it, reads their test classes, and packs those classes into legs for a
+    build matrix. One suite per call:
 
-    Nothing here declares what a suite is, and that is the point. The .slnf is
-    already the thing CI builds -- `dotnet build integration.slnf` -- so
-    deriving the matrix from it means the projects that get built and the
-    projects that get run cannot drift apart. Adding a suite is adding a .slnf.
+        suites.ps1 -Sln integration.slnf -MaxParallel 2
+        suites.ps1 -Sln e2e.slnf         -MaxParallel 1
 
-    The runner property is asked of MSBuild rather than inferred from a name,
-    because names do not discriminate: this solution's e2e filter contains
-    OrderBook.Api, which is also an Exe, and OrderBook.Tests.Shared, which is
-    also called *Tests. Only IsTestingPlatformApplication separates the two
-    projects that can actually run tests, and it is set by the test SDK rather
-    than by this repo.
+    Two calls rather than one that discovers everything, because a suite's
+    filter and its parallelism are decided together and belong in the same
+    line. It also means the cap is a plain number instead of a per-suite
+    string, and each caller reads as what it is.
 
-    A .slnf holding no runner is not a suite and is skipped, so a filter that
-    exists for some other purpose costs nothing.
+    Which projects are runners is asked of MSBuild --
+    IsTestingPlatformApplication, set by the test SDK -- rather than matched by
+    name. Names do not discriminate here: e2e.slnf also contains OrderBook.Api,
+    which is also an Exe, and OrderBook.Tests.Shared, which is also called
+    *Tests. A name pattern has to be kept correct by hand as projects are added
+    and renamed; this cannot go stale.
 
     Class names come from the runner's own structured output:
 
@@ -32,31 +32,52 @@
     text: the banner begins with a letter and contains dots, so it was admitted
     as a test class and produced matrix legs named "(64-bit" and "xUnit.net".
 
-.PARAMETER MaxParallel
-    Caps the legs PER RUNNER: "2" for every suite, or "default=2,e2e=1" to
-    differ. Uncapped means one class per leg.
+    A filter holding no runner is fatal. A suite that silently produced no legs
+    would leave a green pipeline that ran nothing, which is the failure this
+    whole arrangement exists to prevent.
 
-    That difference is the setting that matters. Classes on one leg run in a
-    single process and share their collection's fixture, so packing an
-    expensive suite avoids rebuilding its containers per leg. Measured on this
-    repo, an e2e leg is 94-99% fixture setup.
+.PARAMETER Sln
+    The .slnx or .slnf to read projects from. A filter is the usual choice:
+    it is already what CI builds for that suite, so the projects that get
+    built and the projects that get run cannot drift apart.
+
+
+.PARAMETER MaxParallel
+    Most legs to produce PER TEST PROJECT. Omitted or 0 means one class per leg.
+
+    Per project rather than per suite because a leg runs one executable, so a
+    cap spanning several runners would have to be divided among them. Every
+    filter here holds exactly one runner and the two readings coincide; pass a
+    whole .slnx with two runners and a cap of 3 and you get up to six legs, not
+    three.
+
+    Classes on one leg run in a single process and share their collection's
+    fixture, so packing an expensive suite avoids rebuilding its containers
+    per leg. Measured on this repo, an e2e leg is 94-99% fixture setup, which
+    is why e2e is packed to a single leg and integration is not.
 
 .PARAMETER Ado
-    Emit Azure DevOps' flat matrix shape instead of the per-suite arrays
-    GitHub Actions consumes.
+    Emit Azure DevOps' matrix shape -- an object keyed by leg name -- instead
+    of the array GitHub Actions consumes.
 #>
 [CmdletBinding()]
 param(
-    [string] $Solution      = 'OrderBook.slnx',
+    [Parameter(Mandatory)] [string] $Sln,
+    [string] $Suite,
     [string] $Configuration = 'Release',
-    [string] $MaxParallel   = '',
+    [int]    $MaxParallel   = 0,
     [switch] $Ado
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$root = Split-Path -Parent (Resolve-Path $Solution)
+$slnPath = Resolve-Path $Sln
+$root    = Split-Path -Parent $slnPath
+
+# The suite names the legs, and defaults to the filter's own name so
+# integration.slnf yields integration_1, integration_2.
+if (-not $Suite) { $Suite = [IO.Path]::GetFileNameWithoutExtension($slnPath) }
 
 function Get-Projects {
     <# Project paths out of a .slnx (XML) or a .slnf (JSON), repo-relative. #>
@@ -73,47 +94,39 @@ function Get-Projects {
     $paths | ForEach-Object { $_ -replace '\\', '/' }
 }
 
-$runnerCache = @{}
 function Test-IsRunner {
     <#
     Whether MSBuild considers this project something that can run tests.
 
-    Cached: the same project appears in several filters, and each miss is a
-    process launch.
+    A SINGLE -getProperty prints the bare value; ask for two or more and it
+    switches to a JSON envelope instead. Nothing here wants the envelope, so
+    this reads the one line and compares it.
     #>
     param([string] $Project)
 
-    if (-not $runnerCache.ContainsKey($Project)) {
-        # A SINGLE -getProperty prints the bare value; ask for two or more and
-        # it switches to a JSON envelope instead. Nothing here wants the
-        # envelope, so this reads the one line and compares it.
-        $value = dotnet msbuild (Join-Path $root $Project) `
-            -getProperty:IsTestingPlatformApplication -nologo 2>$null
+    $value = dotnet msbuild (Join-Path $root $Project) `
+        -getProperty:IsTestingPlatformApplication -nologo 2>$null
 
-        $runnerCache[$Project] =
-            ($LASTEXITCODE -eq 0) -and (($value | Select-Object -First 1) -eq 'true')
-    }
-
-    $runnerCache[$Project]
+    ($LASTEXITCODE -eq 0) -and (($value | Select-Object -First 1) -eq 'true')
 }
 
-function Get-Caps {
-    <# "2" or "default=2,e2e=1" -> a hashtable. Empty means no cap. #>
-    param([string] $Spec)
+function ConvertTo-Identifier {
+    <#
+    Azure DevOps matrix configuration names accept only letters, digits and
+    underscores, must start with a letter, and cap at 100 characters. A leg
+    called "integration-1" is therefore rejected outright, before a single test
+    runs -- which is exactly how the first real ADO run of this failed.
 
-    $caps = @{}
-    if ([string]::IsNullOrWhiteSpace($Spec)) { return $caps }
+    Sanitising here rather than demanding it of whoever names a filter, and
+    applied to both output shapes so a leg is called the same thing on either
+    platform.
+    #>
+    param([string] $Name)
 
-    if ($Spec -notmatch '=') {
-        $caps['default'] = [int] $Spec
-        return $caps
-    }
-
-    foreach ($pair in $Spec.Split(',')) {
-        $name, $value = $pair.Split('=', 2)
-        $caps[$name.Trim()] = [int] $value
-    }
-    $caps
+    $safe = $Name -replace '[^A-Za-z0-9_]', '_'
+    if ($safe -notmatch '^[A-Za-z]') { $safe = "suite_$safe" }
+    if ($safe.Length -gt 100) { $safe = $safe.Substring(0, 100) }
+    $safe
 }
 
 function Split-Evenly {
@@ -138,29 +151,9 @@ function Split-Evenly {
     # collection into the pipeline, so `return $groups` hands back the two
     # inner groups rather than the outer array of two -- and a cap of 1 then
     # returns its single group, whose .Count is the CLASS count. That silently
-    # produced two e2e legs under `-MaxParallel e2e=1`, which is the exact
+    # produced two e2e legs under a cap of one, which is the exact
     # over-parallelisation the cap exists to prevent.
     ,$groups
-}
-
-function ConvertTo-Identifier {
-    <#
-    Azure DevOps matrix configuration names accept only letters, digits and
-    underscores, must start with a letter, and cap at 100 characters. A leg
-    called "integration-1" is therefore rejected outright, before a single test
-    runs -- so the hyphen this used to emit would have failed the pipeline on
-    its first execution.
-
-    Sanitising here rather than demanding it of whoever adds a filter: suite
-    names come from .slnf FILE names, which carry no such rule. Applied to both
-    output shapes so a leg is called the same thing on either platform.
-    #>
-    param([string] $Name)
-
-    $safe = $Name -replace '[^A-Za-z0-9_]', '_'
-    if ($safe -notmatch '^[A-Za-z]') { $safe = "suite_$safe" }
-    if ($safe.Length -gt 100) { $safe = $safe.Substring(0, 100) }
-    $safe
 }
 
 function Get-Runner {
@@ -175,7 +168,7 @@ function Get-Runner {
     $exe = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
 
     if (-not $exe) {
-        throw "$name has no $Configuration build at $pattern. Build the solution first."
+        throw "$name has no $Configuration build at $pattern. Build $Sln first."
     }
 
     [pscustomobject] @{
@@ -184,91 +177,56 @@ function Get-Runner {
     }
 }
 
-$caps   = Get-Caps $MaxParallel
-$suites = [ordered] @{}
+$projects = @(Get-Projects $slnPath | Where-Object { Test-IsRunner $_ })
 
-foreach ($filter in Get-ChildItem -Path $root -Filter '*.slnf' | Sort-Object Name) {
-    $runners = @(Get-Projects $filter.FullName | Where-Object { Test-IsRunner $_ })
-
-    # A filter with nothing to run is not a suite. Filters exist for other
-    # reasons -- building only src, say -- and those should cost nothing here.
-    if (-not $runners) { continue }
-
-    $suites[$filter.BaseName] = $runners
-}
-
-# A runner in the solution but in no filter would run nowhere, which from the
-# outside is indistinguishable from a suite that passed.
-$orphans = @(Get-Projects (Resolve-Path $Solution) |
-    Where-Object { Test-IsRunner $_ } |
-    Where-Object { $_ -notin ($suites.Values | ForEach-Object { $_ }) })
-
-if ($orphans) {
-    # throw, not Write-Error + exit: under $ErrorActionPreference = 'Stop' the
-    # Write-Error terminates first and the exit never runs, so the exit CODE
-    # was never the thing being relied on. A throw fails the same way whether
-    # this is run by `pwsh -File` or dot-called from another script.
+if (-not $projects) {
     throw (@(
-        'These test projects are in the solution but in no .slnf, so no runner'
-        'would take them:'
-        ($orphans | ForEach-Object { "  $_" })
-        'Add each to a filter, or add a filter for them.'
+        "no project in $Sln is a test project (IsTestingPlatformApplication)."
+        'Projects in it:'
+        (Get-Projects $slnPath | ForEach-Object { "  " + [IO.Path]::GetFileNameWithoutExtension($_) })
     ) -join [Environment]::NewLine)
 }
 
-$matrix = [ordered] @{}
-foreach ($suite in $suites.Keys) {
-    $cap = if ($caps.ContainsKey($suite)) { $caps[$suite] }
-           elseif ($caps.ContainsKey('default')) { $caps['default'] }
-           else { 0 }
+$legs = [System.Collections.Generic.List[object]]::new()
 
-    $legs = [System.Collections.Generic.List[object]]::new()
+foreach ($project in $projects) {
+    $runner = Get-Runner $project
 
-    foreach ($project in $suites[$suite]) {
-        $runner = Get-Runner $project
+    # Assigned first, then iterated. Split-Evenly returns its groups
+    # comma-wrapped to survive assignment, and that same wrapper makes
+    # `foreach (... in Split-Evenly ...)` yield ONE item -- the whole array --
+    # so every class would land on a single leg.
+    $groups = Split-Evenly -Items $runner.Classes -Into $MaxParallel
 
-        # Assigned first, then iterated. Split-Evenly returns its groups
-        # comma-wrapped to survive assignment, and that same wrapper makes
-        # `foreach (... in Split-Evenly ...)` yield ONE item -- the whole array
-        # -- so every class lands on a single leg.
-        $groups = Split-Evenly -Items $runner.Classes -Into $cap
-
-        foreach ($group in $groups) {
-            $legs.Add([pscustomobject] @{
-                name = "$(ConvertTo-Identifier $suite)_$($legs.Count + 1)"
-                exe  = $runner.Exe
-                # Ready-made arguments, so a pipeline never builds them from an
-                # array in YAML. Classes on one leg run in a SINGLE process and
-                # therefore share whatever fixture their collection defines.
-                args    = (($group | ForEach-Object { "-class `"$_`"" }) -join ' ')
-                classes = ($group -join ' ')
-            })
-        }
+    foreach ($group in $groups) {
+        $legs.Add([pscustomobject] @{
+            name  = "$(ConvertTo-Identifier $Suite)_$($legs.Count + 1)"
+            suite = $Suite
+            exe   = $runner.Exe
+            # Ready-made arguments, so a pipeline never builds them from an
+            # array in YAML. Classes on one leg run in a SINGLE process and
+            # therefore share whatever fixture their collection defines.
+            args    = (($group | ForEach-Object { "-class `"$_`"" }) -join ' ')
+            classes = ($group -join ' ')
+        })
     }
-
-    $matrix[$suite] = @($legs)
 }
 
 if ($Ado) {
-    # Azure DevOps wants one flat object keyed by a unique leg name.
+    # Azure DevOps wants an object keyed by the matrix configuration name.
     $flat = [ordered] @{}
-    foreach ($suite in $matrix.Keys) {
-        foreach ($leg in $matrix[$suite]) {
-            # Two suite names can sanitise to one identifier ("a-b" and "a_b"),
-            # and this shape is keyed by leg name, so the second would silently
-            # replace the first and its tests would run nowhere.
-            if ($flat.Contains($leg.name)) {
-                throw "two suites produce the matrix key '$($leg.name)'. Rename one .slnf."
-            }
-
-            $flat[$leg.name] = [pscustomobject] @{
-                SUITE = $suite; LEG = $leg.name
-                EXE   = $leg.exe; ARGS = $leg.args; CLASSES = $leg.classes
-            }
+    foreach ($leg in $legs) {
+        $flat[$leg.name] = [pscustomobject] @{
+            SUITE = $leg.suite; LEG = $leg.name
+            EXE   = $leg.exe;   ARGS = $leg.args; CLASSES = $leg.classes
         }
     }
     $flat | ConvertTo-Json -Compress -Depth 5
 }
 else {
-    $matrix | ConvertTo-Json -Compress -Depth 5
+    # -InputObject, not the pipeline, and no -AsArray. The pipeline unrolls the
+    # list so a single leg would serialise as a bare object that fromJSON
+    # cannot iterate; -AsArray on top of an already-array input wraps it a
+    # second time and yields [[...]].
+    ConvertTo-Json -InputObject @($legs) -Compress -Depth 5
 }
