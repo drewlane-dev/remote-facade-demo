@@ -51,10 +51,14 @@ stages:
     jobs:
       - job: suite
         displayName: Suite
-        # One agent per suite, each building its own containers. Testcontainers
+        # One agent per leg, each building its own containers. Testcontainers
         # randomises names, networks and host ports, so nothing needs to be
         # coordinated between agents -- the isolation is a property of the
         # fixtures, which is why the suite boundary is the fixture boundary.
+        #
+        # Whether the legs actually overlap is the ORGANISATION's business, not
+        # this file's: a private project with no parallel-jobs grant runs them
+        # one after another, and the pipeline is correct either way.
         strategy:
           matrix: $[ stageDependencies.discover.suites.outputs['emit.matrix'] ]
         pool:
