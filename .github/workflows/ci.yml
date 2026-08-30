@@ -10,11 +10,12 @@ name: ci
 # dominated by bringing the environment up, so splitting evenly by test count
 # would have every runner pay the same setup for a fraction of the work.
 #
-# Nothing here lists the classes. scripts/suites.sh reads them out of the built
-# assemblies. A suite IS a test project, so nothing in the test code declares
-# which one it belongs to -- and the guard checks the SOLUTION instead: a test
-# project no runner would take is fatal, because running nowhere is
-# indistinguishable from passing.
+# Nothing here names a project or a class. scripts/suites.sh reads the solution
+# and identifies suites by project NAME -- *.IntegrationTests and *.E2ETests --
+# then reads the classes out of the built assemblies. Adding a test project to
+# OrderBook.slnx is all it takes to get a runner, and one matching neither
+# pattern is fatal rather than silently skipped, because running on no runner
+# is indistinguishable from passing.
 #
 # MAX_PARALLEL caps the legs PER SUITE. e2e is capped at 1 deliberately: its
 # classes share a collection, so one leg runs them in a single process against
@@ -52,10 +53,7 @@ jobs:
         name: Enumerate and pack suites (fails if a class has no suite)
         run: |
           set -euo pipefail
-          MATRIX="$(./scripts/suites.sh \
-            integration=tests/OrderBook.IntegrationTests/bin/Release/net10.0/OrderBook.IntegrationTests \
-            e2e=tests/OrderBook.E2ETests/bin/Release/net10.0/OrderBook.E2ETests \
-            --max-parallel "$MAX_PARALLEL")"
+          MATRIX="$(./scripts/suites.sh --max-parallel "$MAX_PARALLEL")"
           echo "$MATRIX"
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 

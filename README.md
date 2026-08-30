@@ -221,16 +221,21 @@ API references it directly.
 `OrderBook.slnx` holds every project, and `integration.slnf` / `e2e.slnf` are
 solution filters so a runner builds only what its layer needs.
 
-**A suite is a project.** Nothing in the test code declares which suite it
-belongs to — the assembly already says it:
+**A suite is a project, identified by its name:**
 
-```bash
-scripts/suites.sh \
-  integration=<integration-exe> \
-  e2e=<e2e-exe> \
-  --max-parallel default=2,e2e=1
+```
+*.IntegrationTests  ->  integration
+*.E2ETests          ->  e2e
 ```
 
+So nothing declares which suite anything belongs to — not the test code, not
+the pipeline:
+
+```bash
+scripts/suites.sh --max-parallel default=2,e2e=1
+```
+
+Adding a test project to `OrderBook.slnx` is all it takes to get a runner.
 Class names come from the runner's own `-list classes/json`, so nothing parses
 source or scrapes text.
 
@@ -240,13 +245,13 @@ of containers. Split across legs they each rebuild SQL Server, the API, the
 Angular host and a browser — which is 94–99% of a leg's wall-clock. Split where
 the fixture is cheap; pack where it is expensive.
 
-Nothing lists the classes in YAML, and the guard now watches the **solution**: a
-test project no runner would take is fatal, because running nowhere is
-indistinguishable from passing.
+The guard watches the **solution**: a `*Tests` project matching neither pattern
+is fatal, because running on no runner is indistinguishable from passing.
 
 ```
-These test projects are in OrderBook.slnx but no runner would take them:
-  OrderBook.E2ETests
+These test projects match neither *.IntegrationTests nor *.E2ETests,
+so no runner would take them:
+  OrderBook.WeirdTests
 ```
 
 ## Where the code lives

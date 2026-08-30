@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Emit a CI matrix from BUILT test assemblies.
+# Emit a CI matrix from the solution's test projects.
 #
-# A SUITE is a test project: its own fixture, its own containers, its own
-# runner. A CLASS is the unit of fan-out within it. The project IS the suite,
-# so nothing in the test code declares which one it belongs to.
+# A SUITE is a test project, identified by its NAME:
 #
-#   suites.sh <suite>=<exe> [<suite>=<exe>...] [--max-parallel SPEC] [--ado]
+#     *.IntegrationTests  ->  integration
+#     *.E2ETests          ->  e2e
+#
+# so nothing declares which suite it belongs to -- not the test code, not the
+# pipeline. Adding a test project to OrderBook.slnx is all it takes to get a
+# runner, and a Tests project matching neither pattern is fatal rather than
+# silently skipped.
+#
+#   suites.sh [--configuration Release] [--max-parallel SPEC] [--ado]
 #
 # SPEC caps the legs PER SUITE: "2" for all, or "default=2,e2e=1" to differ.
 # That difference is the setting that matters: classes on one leg run in a
@@ -23,55 +29,76 @@
 # produced matrix legs called "(64-bit" and "xUnit.net".
 set -euo pipefail
 
-pairs=()
+solution="OrderBook.slnx"
+configuration="Release"
 cap=""
 ado=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --max-parallel) cap="$2"; shift 2 ;;
-    --ado)          ado=true; shift ;;
-    *)              pairs+=("$1"); shift ;;
+    --configuration) configuration="$2"; shift 2 ;;
+    --max-parallel)  cap="$2"; shift 2 ;;
+    --ado)           ado=true; shift ;;
+    *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 
-if [ ${#pairs[@]} -eq 0 ]; then
-  echo "usage: suites.sh <suite>=<exe> [...] [--max-parallel SPEC] [--ado]" >&2
-  exit 1
-fi
-
-# A test project missing from this invocation runs on no runner, which is
-# indistinguishable from passing. The solution knows what exists, so ask it
-# rather than trusting the caller to have remembered.
-declared="$(dotnet sln OrderBook.slnx list \
-  | grep -E 'Tests[/\\][^/\\]+\.csproj$' \
-  | grep -v 'Tests\.Shared' \
-  | sed -E 's#.*[/\\]([^/\\]+)\.csproj#\1#' | sort)"
-
-named="$(printf '%s\n' "${pairs[@]}" | sed -E 's#.*[/\\]([^/\\]+)$#\1#' | sort)"
-
-missing="$(comm -23 <(echo "$declared") <(echo "$named") || true)"
-if [ -n "$missing" ]; then
-  echo "These test projects are in OrderBook.slnx but no runner would take them:" >&2
-  echo "$missing" | sed 's/^/  /' >&2
-  echo >&2
-  echo "Add them to the suites.sh invocation. Running on no runner is" >&2
-  echo "indistinguishable from passing, which is why this is fatal." >&2
-  exit 1
-fi
+suite_of() {
+  case "$1" in
+    *.IntegrationTests) echo integration ;;
+    *.E2ETests)         echo e2e ;;
+    *)                  echo "" ;;
+  esac
+}
 
 suites='{}'
-for pair in "${pairs[@]}"; do
-  name="${pair%%=*}"
-  exe="${pair#*=}"
-  [ -x "$exe" ] || { echo "not executable: $exe" >&2; exit 1; }
+unclassified=""
+
+# Every project the solution knows about, so a new one is picked up by being
+# added to the solution rather than by also being remembered here.
+while IFS= read -r project; do
+  name="$(basename "${project%.csproj}")"
+
+  case "$name" in
+    *Tests) ;;          # a test project
+    *) continue ;;
+  esac
+  case "$name" in
+    *Tests.Shared|*.TestHelpers) continue ;;   # support libraries, not suites
+  esac
+
+  suite="$(suite_of "$name")"
+  if [ -z "$suite" ]; then
+    unclassified="$unclassified  $name"$'\n'
+    continue
+  fi
+
+  # Glob the framework folder rather than naming it: a TFM bump should not need
+  # an edit here.
+  exe="$(ls -d "$(dirname "$project")/bin/$configuration"/*/"$name" 2>/dev/null | head -1 || true)"
+  if [ ! -x "${exe:-}" ]; then
+    echo "$name is in $solution but has no $configuration build at" >&2
+    echo "  $(dirname "$project")/bin/$configuration/*/$name" >&2
+    echo "Build the solution before asking for a matrix." >&2
+    exit 1
+  fi
 
   classes="$("$exe" -list classes/json -noColor -noLogo)"
   suites="$(jq -n --argjson acc "$suites" --argjson classes "$classes" \
-                 --arg name "$name" --arg exe "$exe" '
-    $acc + { ($name): { exe: $exe, classes: ($classes | sort) } }
+                 --arg suite "$suite" --arg exe "$exe" '
+    $acc + { ($suite): { exe: $exe, classes: ($classes | sort) } }
   ')"
-done
+done <<<"$(dotnet sln "$solution" list | grep -E '\.csproj$' | tr -d '\r')"
+
+# A Tests project matching neither pattern would run on no runner, which is
+# indistinguishable from passing.
+if [ -n "$unclassified" ]; then
+  echo "These test projects match neither *.IntegrationTests nor *.E2ETests," >&2
+  echo "so no runner would take them:" >&2
+  printf '%s' "$unclassified" >&2
+  echo "Rename them, or teach suite_of about the new suite." >&2
+  exit 1
+fi
 
 jq -c --arg cap "$cap" --argjson ado "$ado" '
   # Deal a list round-robin into at most $n groups.
