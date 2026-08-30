@@ -76,7 +76,7 @@ function Split-Evenly {
     runners where five were asked for. Dealing gives min(count, $Into) every
     time.
     #>
-    param([string[]] $Items, [int] $Into)
+    param([string[]] $Items = @(), [int] $Into)
 
     $into = if ($Into -le 0) { $Items.Count } else { [Math]::Min($Into, $Items.Count) }
 
@@ -112,7 +112,11 @@ function Get-Exe {
 function Get-Classes {
     param([string] $Exe)
 
-    @(& $Exe -list classes/json -noColor -noLogo | ConvertFrom-Json | Sort-Object)
+    $classes = @(& $Exe -list classes/json -noColor -noLogo | ConvertFrom-Json | Sort-Object)
+
+    # comma-wrapped: returning an EMPTY array emits nothing, so the caller's
+    # (Get-Classes ...) would evaluate to $null rather than to an empty list
+    ,$classes
 }
 
 $projects = @(Get-Projects $slnPath | Where-Object { Get-IsTestProject $_ })
@@ -146,6 +150,7 @@ function New-Leg {
 foreach ($project in $projects) {
     $exe = Get-Exe $project
 
+    # When split granularity is Project, we can stop here since granularity doesn ot require class extraction
     if ($Granularity -eq 'Project') {
         # No -class arguments at all: the runner runs everything it has. The
         # class list is never read, so the test binary is not executed here.
@@ -153,11 +158,20 @@ foreach ($project in $projects) {
         continue
     }
 
+    $classes = Get-Classes $exe
+
+    # a test project with no test classes contributes no legs, and a suite of
+    # only those would emit an empty matrix: green, and having run nothing
+    if (-not $classes.Count) {
+        throw ("$([IO.Path]::GetFileNameWithoutExtension($project)) reports no test classes. " +
+               "Remove it from $Sln, or use -Granularity Project if it is meant to run as a whole.")
+    }
+
     # Assigned first, then iterated. Split-Evenly returns its groups
     # comma-wrapped to survive assignment, and that same wrapper makes
     # `foreach (... in Split-Evenly ...)` yield ONE item -- the whole array --
     # so every class would land on a single leg.
-    $groups = Split-Evenly -Items (Get-Classes $exe) -Into $MaxParallel
+    $groups = Split-Evenly -Items $classes -Into $MaxParallel
 
     foreach ($group in $groups) {
         $legs.Add((New-Leg -Exe $exe `
