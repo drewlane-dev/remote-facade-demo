@@ -20,7 +20,7 @@ namespace OrderBook.Tests;
 /// directly, an assertion can be made on what was PERSISTED rather than on what
 /// a page rendered.
 /// </summary>
-public sealed class E2EFixture : IAsyncLifetime
+public sealed class E2EFixture
 {
     // Must match the Microsoft.Playwright package version: the wire protocol is
     // not stable across versions and a mismatch fails at ConnectAsync.
@@ -44,7 +44,7 @@ public sealed class E2EFixture : IAsyncLifetime
 
     public Sql Database => _sql;
 
-    public async ValueTask InitializeAsync()
+    public async Task InitializeAsync()
     {
         try
         {
@@ -140,7 +140,7 @@ public sealed class E2EFixture : IAsyncLifetime
         return await context.NewPageAsync();
     }
 
-    public async ValueTask DisposeAsync() => await SafeTeardownAsync();
+    public async Task DisposeAsync() => await SafeTeardownAsync();
 
     private async Task SafeTeardownAsync()
     {
@@ -154,8 +154,23 @@ public sealed class E2EFixture : IAsyncLifetime
     }
 }
 
-[CollectionDefinition(E2ECollection.Name)]
-public sealed class E2ECollection : ICollectionFixture<E2EFixture>
+/// <summary>
+/// Starts the stack once per PROCESS and tears it down at the end, replacing
+/// xUnit's ICollectionFixture. Every leg is its own process, so "once per
+/// assembly run" and "once per leg" are the same thing here.
+/// </summary>
+[TestClass]
+public static class E2EEnvironment
 {
-    public const string Name = "e2e";
+    public static E2EFixture Fixture { get; private set; } = null!;
+
+    [AssemblyInitialize]
+    public static async Task StartAsync(TestContext _)
+    {
+        Fixture = new E2EFixture();
+        await Fixture.InitializeAsync();
+    }
+
+    [AssemblyCleanup]
+    public static async Task StopAsync() => await Fixture.DisposeAsync();
 }

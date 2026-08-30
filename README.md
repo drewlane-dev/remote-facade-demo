@@ -224,42 +224,59 @@ solution filters so a runner builds only what its layer needs.
 **A suite is a `.slnf`**, and CI packs one per call:
 
 ```powershell
-scripts/suites.ps1 -Sln integration.slnf -MaxParallel 2
-scripts/suites.ps1 -Sln e2e.slnf         -MaxParallel 1
+scripts/suites.ps1 -Sln integration.slnf -Tags domain,graph
+scripts/suites.ps1 -Sln e2e.slnf         -Tags journey
 ```
 
-The cap sits beside the filter it applies to, because the two are decided
-together. `e2e` is packed to a single leg deliberately: its classes share a
-collection, so one leg runs them in a single process against **one** set of
-containers. Split across legs they each rebuild SQL Server, the API, the
-Angular host and a browser — which is 94–99% of a leg's wall-clock. Split where
-the fixture is cheap; pack where it is expensive.
+The split is expressed in `[TestCategory]` tags on the test classes, one leg
+per tag. That is not a style choice: **MSTest cannot list test class names
+without running the tests** — `--list-tests` reports method names only, and
+`--report-trx` is rejected alongside it — so classes are not addressable ahead
+of a run. Tags are, and `--filter` works during discovery, which turns out to
+be the better primitive anyway.
 
-**Granularity** controls how finely a suite splits:
+`e2e` is one tag deliberately: its tests share a browser, API, web and SQL
+stack, and standing that up is 94–99% of the leg's wall-clock. Split across
+legs they would each rebuild all of it. Split where the fixture is cheap; pack
+where it is expensive.
+
+`-MaxParallel` packs several tags onto one leg by OR-ing them into a single
+filter, so the cap still means "at most this many legs".
+
+**Every test must carry exactly one of the tags**, and the script proves it
+before emitting a matrix — without running anything:
+
+```
+OrderBook.IntegrationTests has 4 test(s) carrying none of: domain.
+They would run on no leg. Tag them, or add their tag to -Tags.
+```
+
+Both directions are checked, and the second only means something because of
+the first. An untagged test and a double-tagged one cancel out exactly in a
+sum-versus-total check — 4 + 2 = 6 = total, while one test runs nowhere and
+another runs twice — so the uncovered count is queried directly rather than
+inferred from arithmetic.
+
+**Granularity** offers a coarser option:
 
 ```powershell
-scripts/suites.ps1 -Sln integration.slnf -MaxParallel 2            # by class
 scripts/suites.ps1 -Sln integration.slnf -Granularity Project      # by csproj
 ```
 
-`Project` is the coarse option for suites whose projects are large. It emits
-one leg per test project with no `-class` arguments, and never reads the class
-list — so discovery does not execute the test binaries at all, and a project
-with hundreds of classes does not turn into a command line thousands of
-characters long. `-MaxParallel` does not apply there: a leg runs one
+`Project` emits one leg per test project with no filter at all, and never runs
+a discovery pass. `-MaxParallel` does not apply there: a leg runs one
 executable, so the leg count *is* the project count and cannot be capped below
 it. Passing both is refused rather than quietly ignored.
 
 Which projects inside the filter are runners is asked of MSBuild —
-`IsTestingPlatformApplication`, set by the test SDK — rather than matched by
-name. Names do not discriminate here: `e2e.slnf` also contains `OrderBook.Api`,
-which is also an `Exe`, and `OrderBook.Tests.Shared`, which is also called
-`*Tests`. A name pattern would have to be kept correct by hand as projects are
-added and renamed; this cannot go stale.
+`IsTestingPlatformApplication` — rather than matched by name. Names do not
+discriminate here: `e2e.slnf` also contains `OrderBook.Api`, which is also an
+`Exe`, and `OrderBook.Tests.Shared`, which is also called `*Tests`. A name
+pattern would have to be kept correct by hand as projects are added and
+renamed; this cannot go stale.
 
 The filter is already what each leg builds, so the projects that get built and
-the projects that get run cannot drift apart. Class names come from the
-runner's own `-list classes/json`, so nothing parses source or scrapes text.
+the projects that get run cannot drift apart.
 
 A filter holding no test project is fatal, because a suite that runs nothing is
 indistinguishable from one that passes.
@@ -284,7 +301,7 @@ That is the simplest arrangement, and the right one when the startup and facade
 are test scaffolding you want sitting next to the tests that use them.
 
 **What it costs.** The whole test output is copied into every container: here
-that is 13 MB and 19 assemblies — xunit, Testcontainers, Docker.DotNet and the
+that is 13 MB and 19 assemblies — MSTest, Testcontainers, Docker.DotNet and the
 rest — against 216 KB and 4 for the application alone. It also puts
 test-framework assemblies on the container's assembly-resolution path. Fine for
 a handful of containers; worth avoiding if you start many, or if you want a hard

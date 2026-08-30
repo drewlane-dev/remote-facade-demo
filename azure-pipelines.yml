@@ -3,10 +3,10 @@
 # The matrix is NOT written here. A hand-maintained list drifts the moment
 # someone adds a test class, and it drifts silently: the class runs on no agent,
 # every leg stays green, and nothing reports that coverage shrank.
-# scripts/suites.ps1 is called once per suite with that suite's filter, finds
-# the runners inside it by asking MSBuild which projects are
-# IsTestingPlatformApplication, and refuses to emit a matrix for a filter that
-# holds no test project.
+# scripts/suites.ps1 is called once per suite with that suite's filter and its
+# [TestCategory] tags, and refuses to emit a matrix unless every test in the
+# filter carries exactly one of those tags -- proved during discovery, without
+# running a test.
 
 trigger:
   branches:
@@ -39,14 +39,14 @@ stages:
           # packed to one leg because its classes share a collection and one
           # leg runs them against a single set of containers.
           - pwsh: |
-              $legs = ./scripts/suites.ps1 -Sln integration.slnf -MaxParallel 2 -Ado
+              $legs = ./scripts/suites.ps1 -Sln integration.slnf -Tags domain,graph -Ado
               Write-Host "integration: $legs"
               Write-Host "##vso[task.setvariable variable=legs;isOutput=true]$legs"
             name: emitIntegration
             displayName: Pack the integration suite
 
           - pwsh: |
-              $legs = ./scripts/suites.ps1 -Sln e2e.slnf -MaxParallel 1 -Ado
+              $legs = ./scripts/suites.ps1 -Sln e2e.slnf -Tags journey -Ado
               Write-Host "e2e: $legs"
               Write-Host "##vso[task.setvariable variable=legs;isOutput=true]$legs"
             name: emitE2e

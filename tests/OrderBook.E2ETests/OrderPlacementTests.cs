@@ -10,22 +10,25 @@ namespace OrderBook.Tests;
 /// DATABASE. A page can show the right text for the wrong reason -- a stale
 /// render, a cached response, a mocked layer -- and the row cannot.
 /// </summary>
-[Collection(E2ECollection.Name)]
-public class OrderPlacementTests(E2EFixture fixture)
+[TestClass]
+[TestCategory(Suites.Journey)]
+public class OrderPlacementTests
 {
-    private async Task<IPage> FreshAsync()
+    private static E2EFixture Fixture => E2EEnvironment.Fixture;
+
+    private static async Task<IPage> FreshAsync()
     {
-        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? string.Empty);
-        return await fixture.FreshPageAsync();
+        Suites.SkipIfUnavailable(Fixture.SkipReason);
+        return await Fixture.FreshPageAsync();
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Clicking_place_writes_a_row_through_the_whole_stack()
     {
         // Browser -> nginx -> API -> domain -> SQL Server. Four containers, and
         // the assertion at the end is on the row.
         var page = await FreshAsync();
-        await page.GotoAsync(fixture.BaseUrl);
+        await page.GotoAsync(Fixture.BaseUrl);
 
         await page.GetByTestId("symbol").FillAsync("BP");
         await page.GetByTestId("quantity").FillAsync("250");
@@ -35,19 +38,19 @@ public class OrderPlacementTests(E2EFixture fixture)
         // the click reached the real domain rather than a stubbed response.
         await Assertions.Expect(page.GetByTestId("reference")).ToContainTextAsync("LSE-");
 
-        await using var db = fixture.Database.Connect();
+        await using var db = Fixture.Database.Connect();
         var row = await db.Orders.SingleAsync();
-        Assert.Equal("BP", row.Symbol);
-        Assert.Equal(250, row.Quantity);
+        Assert.AreEqual("BP", row.Symbol);
+        Assert.AreEqual(250, row.Quantity);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task An_order_placed_in_the_UI_appears_on_the_audit_page()
     {
         // The audit entry exists because the domain wrote it in the same
         // transaction. The UI never carries anything between the two pages.
         var page = await FreshAsync();
-        await page.GotoAsync(fixture.BaseUrl);
+        await page.GotoAsync(Fixture.BaseUrl);
 
         await page.GetByTestId("symbol").FillAsync("RIO");
         await page.GetByTestId("place").ClickAsync();
@@ -57,17 +60,17 @@ public class OrderPlacementTests(E2EFixture fixture)
         await Assertions.Expect(page.GetByTestId("entry")).ToContainTextAsync("RIO");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task The_refresh_button_updates_without_a_navigation()
     {
         var page = await FreshAsync();
-        await page.GotoAsync(fixture.BaseUrl);
+        await page.GotoAsync(Fixture.BaseUrl);
         await Assertions.Expect(page.GetByTestId("count")).ToHaveTextAsync("0");
 
         // Written straight to the database, so the rendered page is stale. The
         // count can only change if the button's request actually ran -- and the
         // URL is asserted unchanged, because a reload would also fix it.
-        await using (var db = fixture.Database.Connect())
+        await using (var db = Fixture.Database.Connect())
         {
             db.Orders.Add(new OrderRow
             {
@@ -80,17 +83,17 @@ public class OrderPlacementTests(E2EFixture fixture)
         await page.GetByTestId("refresh").ClickAsync();
 
         await Assertions.Expect(page.GetByTestId("count")).ToHaveTextAsync("1");
-        Assert.Equal(before, page.Url);
+        Assert.AreEqual(before, page.Url);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task A_domain_rejection_reaches_the_page_with_its_own_message()
     {
         // Thrown by the domain inside the API container, mapped to a 400,
         // rendered by Angular. Three hops, and the text a user sees is the one
         // the domain wrote.
         var page = await FreshAsync();
-        await page.GotoAsync(fixture.BaseUrl);
+        await page.GotoAsync(Fixture.BaseUrl);
 
         await page.GetByTestId("quantity").FillAsync("-1");
         await page.GetByTestId("place").ClickAsync();
@@ -99,7 +102,7 @@ public class OrderPlacementTests(E2EFixture fixture)
 
         // And nothing was written: a rejection that still persisted would be
         // far worse than one that failed loudly.
-        await using var db = fixture.Database.Connect();
-        Assert.Equal(0, await db.Orders.CountAsync());
+        await using var db = Fixture.Database.Connect();
+        Assert.AreEqual(0, await db.Orders.CountAsync());
     }
 }

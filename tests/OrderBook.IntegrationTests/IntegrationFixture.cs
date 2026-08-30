@@ -13,7 +13,7 @@ namespace OrderBook.Tests;
 /// No API and no browser. This layer drives the domain directly, which is
 /// faster, fails more precisely, and can assert things a page never shows.
 /// </summary>
-public sealed class IntegrationFixture : IAsyncLifetime
+public sealed class IntegrationFixture
 {
     private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:3.3.2";
 
@@ -52,7 +52,7 @@ public sealed class IntegrationFixture : IAsyncLifetime
         }
     }
 
-    public async ValueTask InitializeAsync()
+    public async Task InitializeAsync()
     {
         // Docker availability and fixture correctness are separated on purpose.
         // Catching everything and setting SkipReason turns a bug in this file
@@ -111,7 +111,7 @@ public sealed class IntegrationFixture : IAsyncLifetime
         await FixedClockHost.ResetAsync();
     }
 
-    public async ValueTask DisposeAsync() => await SafeTeardownAsync();
+    public async Task DisposeAsync() => await SafeTeardownAsync();
 
     private async Task SafeTeardownAsync()
     {
@@ -124,8 +124,27 @@ public sealed class IntegrationFixture : IAsyncLifetime
     }
 }
 
-[CollectionDefinition(IntegrationCollection.Name, DisableParallelization = true)]
-public sealed class IntegrationCollection : ICollectionFixture<IntegrationFixture>
+/// <summary>
+/// Starts the environment once per PROCESS and tears it down at the end.
+///
+/// This replaces xUnit's ICollectionFixture, and the mapping is exact rather
+/// than approximate: the splitter already gives every leg its own process, so
+/// "once per assembly run" and "once per leg" are the same thing. MSTest also
+/// runs classes serially unless an assembly opts into [Parallelize], which is
+/// what the collection's DisableParallelization was for.
+/// </summary>
+[TestClass]
+public static class IntegrationEnvironment
 {
-    public const string Name = "integration";
+    public static IntegrationFixture Fixture { get; private set; } = null!;
+
+    [AssemblyInitialize]
+    public static async Task StartAsync(TestContext _)
+    {
+        Fixture = new IntegrationFixture();
+        await Fixture.InitializeAsync();
+    }
+
+    [AssemblyCleanup]
+    public static async Task StopAsync() => await Fixture.DisposeAsync();
 }

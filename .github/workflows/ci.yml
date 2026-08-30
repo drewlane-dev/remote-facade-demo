@@ -11,14 +11,17 @@ name: ci
 # would have every runner pay the same setup for a fraction of the work.
 #
 # Nothing here names a project or a class. scripts/suites.ps1 is called once
-# per suite with that suite's filter, and finds the runners inside it by asking
-# MSBuild which projects are IsTestingPlatformApplication -- not by matching a
-# name, which would have to be kept correct by hand as projects are added and
-# renamed. The filter is already what the legs below build, so what gets built
-# and what gets run cannot drift apart.
+# per suite with that suite's filter and its tags, and finds the runners inside
+# the filter by asking MSBuild which projects are IsTestingPlatformApplication.
+# The filter is already what the legs below build, so what gets built and what
+# gets run cannot drift apart.
 #
-# A filter holding no test project is fatal rather than silently empty, because
-# a suite that runs nothing is indistinguishable from one that passes.
+# The tags are [TestCategory] on the test classes. MSTest cannot list test
+# CLASS names without running the tests -- --list-tests reports method names
+# only -- so tags are what the split is expressed in. It honours --filter
+# during discovery, which is how the script proves, without running anything,
+# that every test carries exactly one of the tags below. A test carrying none
+# would run on no leg, which is indistinguishable from a leg that passed.
 #
 # The cap lives on the call, next to the filter it applies to, because the two
 # are decided together. e2e is capped at 1 deliberately: its classes share a
@@ -56,7 +59,7 @@ jobs:
         name: Pack the integration suite
         shell: pwsh
         run: |
-          $legs = ./scripts/suites.ps1 -Sln integration.slnf -MaxParallel 2
+          $legs = ./scripts/suites.ps1 -Sln integration.slnf -Tags domain,graph
           $legs
           "legs=$legs" >> $env:GITHUB_OUTPUT
 
@@ -64,7 +67,7 @@ jobs:
         name: Pack the e2e suite
         shell: pwsh
         run: |
-          $legs = ./scripts/suites.ps1 -Sln e2e.slnf -MaxParallel 1
+          $legs = ./scripts/suites.ps1 -Sln e2e.slnf -Tags journey
           $legs
           "legs=$legs" >> $env:GITHUB_OUTPUT
 
@@ -84,20 +87,23 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      # matrix.leg.args is a ready-made "-class A -class B", so the classes on
-      # one leg run in a SINGLE process and share whatever fixture their
-      # collection defines. Building the arguments here from an array would
-      # lose that.
+      # matrix.leg.args is a ready-made --filter expression, so the tags on one
+      # leg run in a SINGLE process and share the one [AssemblyInitialize]
+      # environment. Building the filter here from an array would lose that.
       # The solution FILTER, not the whole solution: an integration runner has
       # no reason to build the API or the e2e project, and building them is
       # time this leg pays for nothing.
-      - name: Run ${{ matrix.leg.classes }}
+      - name: Run ${{ matrix.leg.tags }}
         run: |
           set -euo pipefail
           dotnet build ${{ matrix.leg.suite }}.slnf -c Release
+          # --results-directory is not optional: MSTest writes the TRX beside
+          # the test BINARY by default, not into the working directory, so the
+          # upload below would find nothing.
           "${{ matrix.leg.exe }}" \
             ${{ matrix.leg.args }} \
-            -trx "${{ matrix.leg.name }}.trx"
+            --report-trx --report-trx-filename "${{ matrix.leg.name }}.trx" \
+            --results-directory .
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -123,20 +129,23 @@ jobs:
       # Each leg builds its OWN facade, web app and browser. Testcontainers
       # randomises names, networks and host ports, so nothing needs coordinating
       # between runners -- the isolation is a property of the fixtures.
-      # matrix.leg.args is a ready-made "-class A -class B", so the classes on
-      # one leg run in a SINGLE process and share whatever fixture their
-      # collection defines. Building the arguments here from an array would
-      # lose that.
+      # matrix.leg.args is a ready-made --filter expression, so the tags on one
+      # leg run in a SINGLE process and share the one [AssemblyInitialize]
+      # environment. Building the filter here from an array would lose that.
       # The solution FILTER, not the whole solution: an integration runner has
       # no reason to build the API or the e2e project, and building them is
       # time this leg pays for nothing.
-      - name: Run ${{ matrix.leg.classes }}
+      - name: Run ${{ matrix.leg.tags }}
         run: |
           set -euo pipefail
           dotnet build ${{ matrix.leg.suite }}.slnf -c Release
+          # --results-directory is not optional: MSTest writes the TRX beside
+          # the test BINARY by default, not into the working directory, so the
+          # upload below would find nothing.
           "${{ matrix.leg.exe }}" \
             ${{ matrix.leg.args }} \
-            -trx "${{ matrix.leg.name }}.trx"
+            --report-trx --report-trx-filename "${{ matrix.leg.name }}.trx" \
+            --results-directory .
 
       - uses: actions/upload-artifact@v4
         if: always()

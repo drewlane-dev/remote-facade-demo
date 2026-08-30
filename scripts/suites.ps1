@@ -1,14 +1,15 @@
 #!/usr/bin/env pwsh
 
 #generate a matrix of test legs for a slnx or slnf
-#-Granularity Class (default) splits by test class, packed down to -MaxParallel
-#-Granularity Project splits by test project and never lists classes
+#-Granularity Tag (default) splits by [TestCategory], packed down to -MaxParallel
+#-Granularity Project splits by test project and ignores tags entirely
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $Sln,
+    [string[]] $Tags = @(),
     [string] $Suite,
-    [ValidateSet('Class', 'Project')]
-    [string] $Granularity   = 'Class',
+    [ValidateSet('Tag', 'Project')]
+    [string] $Granularity   = 'Tag',
     [string] $Configuration = 'Release',
     [int]    $MaxParallel   = 0,
     [switch] $Ado
@@ -16,6 +17,16 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# `pwsh -File` passes every argument as a literal STRING with no expression
+# evaluation, so -Tags domain,graph arrives as one element, not two, and the
+# filter becomes TestCategory!=domain,graph -- which matches everything.
+# Splitting here accepts both that form and a real array from -Command.
+$Tags = @($Tags | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+if ($Granularity -eq 'Tag' -and -not $Tags) {
+    throw "-Tags is required at Tag granularity. Use -Granularity Project to run whole projects."
+}
 
 if ($Granularity -eq 'Project' -and $MaxParallel -gt 0) {
     throw ("-MaxParallel does not apply at Project granularity: a leg runs one " +
@@ -47,7 +58,6 @@ function Get-Projects {
 
 # ask msbuild if this is a test project
 function Get-IsTestProject {
-    
     param([string] $Project)
 
     $value = dotnet msbuild (Join-Path $root $Project) `
@@ -71,8 +81,8 @@ function Split-Evenly {
     Deal items round-robin into at most $Into groups.
 
     Round-robin rather than contiguous chunks, because chunking cannot produce
-    exactly $Into groups when it does not divide the count: 6 classes at a cap
-    of 5, chunked by ceil(6/5)=2, gives THREE groups -- silently using three
+    exactly $Into groups when it does not divide the count: 6 tags at a cap of
+    5, chunked by ceil(6/5)=2, gives THREE groups -- silently using three
     runners where five were asked for. Dealing gives min(count, $Into) every
     time.
     #>
@@ -87,7 +97,7 @@ function Split-Evenly {
     # The leading comma is load-bearing. PowerShell UNROLLS a returned
     # collection into the pipeline, so `return $groups` hands back the two
     # inner groups rather than the outer array of two -- and a cap of 1 then
-    # returns its single group, whose .Count is the CLASS count. That silently
+    # returns its single group, whose .Count is the ITEM count. That silently
     # produced two e2e legs under a cap of one, which is the exact
     # over-parallelisation the cap exists to prevent.
     ,$groups
@@ -107,16 +117,18 @@ function Get-Exe {
     $exe.FullName
 }
 
-# list classes from the runner's own output; EXECUTES the test binary, so this is
-# the one part of discovery that scales with the suite, and Project skips it
-function Get-Classes {
-    param([string] $Exe)
+# count matching tests WITHOUT running them: --list-tests honours --filter, so
+# every guard below costs a discovery pass and no test execution
+function Measure-Tests {
+    param([string] $Exe, [string] $Filter)
 
-    $classes = @(& $Exe -list classes/json -noColor -noLogo | ConvertFrom-Json | Sort-Object)
+    $output = if ($Filter) { & $Exe --list-tests --filter $Filter 2>&1 }
+              else         { & $Exe --list-tests 2>&1 }
 
-    # comma-wrapped: returning an EMPTY array emits nothing, so the caller's
-    # (Get-Classes ...) would evaluate to $null rather than to an empty list
-    ,$classes
+    $match = $output | Select-String -Pattern 'found (\d+) test' | Select-Object -First 1
+    if (-not $match) { throw "could not read a test count from $Exe. Output: $($output -join ' ')" }
+
+    [int] $match.Matches[0].Groups[1].Value
 }
 
 $projects = @(Get-Projects $slnPath | Where-Object { Get-IsTestProject $_ })
@@ -133,50 +145,59 @@ if (-not $projects) {
 $legs = [System.Collections.Generic.List[object]]::new()
 
 function New-Leg {
-    param([string] $Exe, [string] $LegArgs, [string] $Classes)
+    param([string] $Exe, [string] $LegArgs, [string] $Tags)
 
     [pscustomobject] @{
         name  = "$(ConvertTo-Identifier $Suite)_$($legs.Count + 1)"
         suite = $Suite
         exe   = [IO.Path]::GetRelativePath($root, $Exe)
         # Ready-made arguments, so a pipeline never builds them from an array
-        # in YAML. Classes on one leg run in a SINGLE process and therefore
-        # share whatever fixture their collection defines.
-        args    = $LegArgs
-        classes = $Classes
+        # in YAML. Tags on one leg run in a SINGLE process and therefore share
+        # whatever [AssemblyInitialize] sets up.
+        args = $LegArgs
+        tags = $Tags
     }
 }
 
 foreach ($project in $projects) {
-    $exe = Get-Exe $project
+    $exe  = Get-Exe $project
+    $name = [IO.Path]::GetFileNameWithoutExtension($project)
 
-    # When split granularity is Project, we can stop here since granularity doesn ot require class extraction
     if ($Granularity -eq 'Project') {
-        # No -class arguments at all: the runner runs everything it has. The
-        # class list is never read, so the test binary is not executed here.
-        $legs.Add((New-Leg -Exe $exe -LegArgs '' -Classes ([IO.Path]::GetFileNameWithoutExtension($project))))
+        $legs.Add((New-Leg -Exe $exe -LegArgs '' -Tags $name))
         continue
     }
 
-    $classes = Get-Classes $exe
-
-    # a test project with no test classes contributes no legs, and a suite of
-    # only those would emit an empty matrix: green, and having run nothing
-    if (-not $classes.Count) {
-        throw ("$([IO.Path]::GetFileNameWithoutExtension($project)) reports no test classes. " +
-               "Remove it from $Sln, or use -Granularity Project if it is meant to run as a whole.")
+    $total = Measure-Tests -Exe $exe
+    if ($total -eq 0) {
+        throw "$name contains no tests. Remove it from $Sln."
     }
 
-    # Assigned first, then iterated. Split-Evenly returns its groups
-    # comma-wrapped to survive assignment, and that same wrapper makes
-    # `foreach (... in Split-Evenly ...)` yield ONE item -- the whole array --
-    # so every class would land on a single leg.
-    $groups = Split-Evenly -Items $classes -Into $MaxParallel
+    # A test carrying none of the tags runs on no leg, which from the outside
+    # is indistinguishable from a leg that passed.
+    $uncoveredFilter = ($Tags | ForEach-Object { "TestCategory!=$_" }) -join '&'
+    $uncovered = Measure-Tests -Exe $exe -Filter $uncoveredFilter
+    if ($uncovered -gt 0) {
+        throw ("$name has $uncovered test(s) carrying none of: $($Tags -join ', '). " +
+               "They would run on no leg. Tag them, or add their tag to -Tags.")
+    }
+
+    # Sum-vs-total catches the opposite fault, a test in TWO tags running twice.
+    # It is only conclusive BECAUSE uncovered is already known to be zero: an
+    # untagged test and an overlapping one cancel out exactly, and a sum check
+    # alone then passes while a test runs nowhere.
+    $perTag = @($Tags | ForEach-Object { Measure-Tests -Exe $exe -Filter "TestCategory=$_" })
+    $sum = ($perTag | Measure-Object -Sum).Sum
+    if ($sum -ne $total) {
+        throw ("$name has tests in more than one of: $($Tags -join ', ') " +
+               "($sum tagged across $total tests). They would run on several legs.")
+    }
+
+    $groups = Split-Evenly -Items $Tags -Into $MaxParallel
 
     foreach ($group in $groups) {
-        $legs.Add((New-Leg -Exe $exe `
-            -LegArgs (($group | ForEach-Object { "-class `"$_`"" }) -join ' ') `
-            -Classes ($group -join ' ')))
+        $filter = ($group | ForEach-Object { "TestCategory=$_" }) -join '|'
+        $legs.Add((New-Leg -Exe $exe -LegArgs "--filter `"$filter`"" -Tags ($group -join ' ')))
     }
 }
 
@@ -186,7 +207,7 @@ if ($Ado) {
     foreach ($leg in $legs) {
         $flat[$leg.name] = [pscustomobject] @{
             SUITE = $leg.suite; LEG = $leg.name
-            EXE   = $leg.exe;   ARGS = $leg.args; CLASSES = $leg.classes
+            EXE   = $leg.exe;   ARGS = $leg.args; TAGS = $leg.tags
         }
     }
     $flat | ConvertTo-Json -Compress -Depth 5

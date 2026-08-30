@@ -14,13 +14,17 @@ steps:
   #
   # The solution FILTER, not the whole solution: an integration leg has no
   # reason to build the API or the e2e project.
+  # --results-directory is not optional: MSTest writes the TRX beside the test
+  # BINARY by default, not into the working directory, and PublishTestResults
+  # below searches the sources directory.
   - script: |
       set -eu
       dotnet build "$(SUITE).slnf" -c Release
       "$(EXE)" \
         $(ARGS) \
-        -trx "$(LEG).trx"
-    displayName: Run $(SUITE) / $(CLASSES)
+        --report-trx --report-trx-filename "$(LEG).trx" \
+        --results-directory .
+    displayName: Run $(SUITE) / $(TAGS)
 
   # ADO aggregates TRX from every leg into one test run.
   - task: PublishTestResults@2
@@ -30,5 +34,5 @@ steps:
       testResultsFormat: VSTest
       testResultsFiles: '*.trx'
       searchFolder: '$(Build.SourcesDirectory)'
-      testRunTitle: '$(SUITE) / $(CLASSES)'
+      testRunTitle: '$(SUITE) / $(TAGS)'
       failTaskOnFailedTests: true

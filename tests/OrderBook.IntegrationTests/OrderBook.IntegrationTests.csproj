@@ -5,18 +5,19 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
-    <!-- xUnit v3 projects are executables hosted on Microsoft.Testing.Platform. -->
+    <!-- MSTest projects are executables hosted on Microsoft.Testing.Platform. -->
     <OutputType>Exe</OutputType>
+    <EnableMSTestRunner>true</EnableMSTestRunner>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
     <UseRidGraph>true</UseRidGraph>
   </PropertyGroup>
 
   <ItemGroup>
-    <Using Include="Xunit" />
+    <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="xunit.v3" Version="3.1.0" />
-    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="1.8.3" />
+    <PackageReference Include="MSTest" Version="4.3.3" />
     <PackageReference Include="Testcontainers" Version="4.6.0" />
     <PackageReference Include="RemoteFacade.Client" Version="3.3.0" />
     <PackageReference Include="RemoteFacade.Testcontainers" Version="3.3.0" />
