@@ -10,12 +10,14 @@ name: ci
 # dominated by bringing the environment up, so splitting evenly by test count
 # would have every runner pay the same setup for a fraction of the work.
 #
-# Nothing here names a project or a class. scripts/suites.sh reads the solution
-# and identifies suites by project NAME -- *.IntegrationTests and *.E2ETests --
-# then reads the classes out of the built assemblies. Adding a test project to
-# OrderBook.slnx is all it takes to get a runner, and one matching neither
-# pattern is fatal rather than silently skipped, because running on no runner
-# is indistinguishable from passing.
+# Nothing here names a project or a class. scripts/suites.ps1 derives the matrix
+# from the .slnf files: a suite IS a filter, and its runners are whichever
+# projects in it MSBuild reports as IsTestingPlatformApplication. The filters
+# are already what the legs below build, so what gets built and what gets run
+# cannot drift apart, and adding a suite is adding a .slnf.
+#
+# A test project in the solution but in no filter is fatal rather than silently
+# skipped, because running on no runner is indistinguishable from passing.
 #
 # MAX_PARALLEL caps the legs PER SUITE. e2e is capped at 1 deliberately: its
 # classes share a collection, so one leg runs them in a single process against
@@ -50,12 +52,12 @@ jobs:
         name: Build the solution
 
       - id: suites
-        name: Enumerate and pack suites (fails if a class has no suite)
+        name: Enumerate and pack suites (fails if a test project has no filter)
+        shell: pwsh
         run: |
-          set -euo pipefail
-          MATRIX="$(./scripts/suites.sh --max-parallel "$MAX_PARALLEL")"
-          echo "$MATRIX"
-          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          $matrix = ./scripts/suites.ps1 -MaxParallel $env:MAX_PARALLEL
+          $matrix
+          "matrix=$matrix" >> $env:GITHUB_OUTPUT
 
   integration:
     name: ${{ matrix.leg.name }}

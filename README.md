@@ -221,37 +221,39 @@ API references it directly.
 `OrderBook.slnx` holds every project, and `integration.slnf` / `e2e.slnf` are
 solution filters so a runner builds only what its layer needs.
 
-**A suite is a project, identified by its name:**
+**A suite is a `.slnf`.** Its name is the file's name, and its runners are
+whichever projects in it MSBuild reports as `IsTestingPlatformApplication`:
 
-```
-*.IntegrationTests  ->  integration
-*.E2ETests          ->  e2e
+```powershell
+scripts/suites.ps1 -MaxParallel default=2,e2e=1
 ```
 
 So nothing declares which suite anything belongs to — not the test code, not
-the pipeline:
+the pipeline. The filters are already what each runner builds, so the projects
+that get built and the projects that get run cannot drift apart, and adding a
+suite is adding a `.slnf`.
 
-```bash
-scripts/suites.sh --max-parallel default=2,e2e=1
-```
+The runner is asked of MSBuild rather than inferred from a name, because names
+do not discriminate: `e2e.slnf` also contains `OrderBook.Api`, which is also an
+`Exe`, and `OrderBook.Tests.Shared`, which is also called `*Tests`. A filter
+holding no runner is simply not a suite.
 
-Adding a test project to `OrderBook.slnx` is all it takes to get a runner.
 Class names come from the runner's own `-list classes/json`, so nothing parses
 source or scrapes text.
 
-`--max-parallel` caps the legs **per suite**. `e2e=1` is deliberate: its classes
+`-MaxParallel` caps the legs **per suite**. `e2e=1` is deliberate: its classes
 share a collection, so one leg runs them in a single process against **one** set
 of containers. Split across legs they each rebuild SQL Server, the API, the
 Angular host and a browser — which is 94–99% of a leg's wall-clock. Split where
 the fixture is cheap; pack where it is expensive.
 
-The guard watches the **solution**: a `*Tests` project matching neither pattern
-is fatal, because running on no runner is indistinguishable from passing.
+The guard watches the **solution**: a test project in no filter is fatal,
+because running on no runner is indistinguishable from passing.
 
 ```
-These test projects match neither *.IntegrationTests nor *.E2ETests,
-so no runner would take them:
-  OrderBook.WeirdTests
+These test projects are in the solution but in no .slnf, so no runner
+would take them:
+  tests/OrderBook.WeirdTests/OrderBook.WeirdTests.csproj
 ```
 
 ## Where the code lives

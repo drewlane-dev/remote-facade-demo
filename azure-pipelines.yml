@@ -2,9 +2,10 @@
 #
 # The matrix is NOT written here. A hand-maintained list drifts the moment
 # someone adds a test class, and it drifts silently: the class runs on no agent,
-# every leg stays green, and nothing reports that coverage shrank. scripts/suites.sh
-# reads the suites out of the compiled tests and refuses to emit a matrix at all
-# if any class belongs to none.
+# every leg stays green, and nothing reports that coverage shrank.
+# scripts/suites.ps1 takes the suites from the .slnf files and the classes from
+# the compiled tests, and refuses to emit a matrix at all if a test project
+# belongs to no filter.
 
 trigger:
   branches:
@@ -32,13 +33,12 @@ stages:
 
           # Publishing the matrix as an output variable is what lets the next
           # stage fan out over something computed rather than something typed.
-          - script: |
-              set -eu
-              MATRIX="$(./scripts/suites.sh --max-parallel default=2,e2e=1 --ado)"
-              echo "matrix: $MATRIX"
-              echo "##vso[task.setvariable variable=matrix;isOutput=true]$MATRIX"
+          - pwsh: |
+              $matrix = ./scripts/suites.ps1 -MaxParallel default=2,e2e=1 -Ado
+              Write-Host "matrix: $matrix"
+              Write-Host "##vso[task.setvariable variable=matrix;isOutput=true]$matrix"
             name: emit
-            displayName: Build matrix (fails if a class has no suite)
+            displayName: Build matrix (fails if a test project has no filter)
 
   - stage: test
     displayName: Run suites in parallel
