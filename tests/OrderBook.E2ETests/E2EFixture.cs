@@ -62,7 +62,7 @@ public sealed class E2EFixture
             _sql = await Sql.StartAsync(_network);
             await _sql.EnsureSchemaAsync();
 
-            _api = await StartAsync(await ImageAsync("src/OrderBook.Api/Dockerfile", "orderbook-api:test"),
+            _api = await StartAsync(await ImageAsync("src/OrderBook.Api/Dockerfile", "orderbook-api:test", "E2E_API_IMAGE"),
                 "api", b => b
                     .WithEnvironment("SQL_CONNECTION", _sql.InternalConnection)
                     .WithEnvironment("VENUE", "LSE")
@@ -71,7 +71,7 @@ public sealed class E2EFixture
                     .WithWaitStrategy(Wait.ForUnixContainer()
                         .UntilHttpRequestIsSucceeded(r => r.ForPath("/health").ForPort(8080))));
 
-            _web = await StartAsync(await ImageAsync("src/OrderBook.Ui/Dockerfile", "orderbook-ui:test"),
+            _web = await StartAsync(await ImageAsync("src/OrderBook.Ui/Dockerfile", "orderbook-ui:test", "E2E_WEB_IMAGE"),
                 "web", b => b.WithWaitStrategy(Wait.ForUnixContainer()
                     .UntilHttpRequestIsSucceeded(r => r.ForPath("/").ForPort(8080))));
 
@@ -97,11 +97,18 @@ public sealed class E2EFixture
     }
 
     /// <summary>
-    /// Built from this repo at run time, so there is no image to publish and
-    /// what is tested is always the source in the working tree.
+    /// The image to run: the one CI built and pushed, or a local build.
+    ///
+    /// In CI the reference arrives as a digest, so every leg runs the same
+    /// bytes and those bytes are the artifact the run produced. Building per
+    /// leg instead would test something assembled on the agent that no leg can
+    /// prove matches any other, and that nothing downstream will ever ship.
     /// </summary>
-    private static async Task<IImage> ImageAsync(string dockerfile, string name)
+    private static async Task<string> ImageAsync(string dockerfile, string name, string variable)
     {
+        var pinned = Images.Pinned(variable);
+        if (pinned is not null) return pinned;
+
         var image = new ImageFromDockerfileBuilder()
             // By .git, not .sln: this repo has no solution file, and
             // GetSolutionDirectory() throws rather than falling back.
@@ -112,10 +119,10 @@ public sealed class E2EFixture
             .Build();
 
         await image.CreateAsync();
-        return image;
+        return image.FullName;
     }
 
-    private async Task<IContainer> StartAsync(IImage image, string alias, Func<ContainerBuilder, ContainerBuilder> extra)
+    private async Task<IContainer> StartAsync(string image, string alias, Func<ContainerBuilder, ContainerBuilder> extra)
     {
         var builder = new ContainerBuilder()
             .WithImage(image)

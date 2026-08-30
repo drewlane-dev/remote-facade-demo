@@ -221,6 +221,30 @@ API references it directly.
 `OrderBook.slnx` holds every project, and `integration.slnf` / `e2e.slnf` are
 solution filters so a runner builds only what its layer needs.
 
+**Images are built once, then pinned by digest.** A build job builds the API
+and web images, pushes them to GHCR, and hands the legs a digest reference:
+
+```
+E2E_API_IMAGE  ghcr.io/drewlane-dev/orderbook-api@sha256:...
+E2E_WEB_IMAGE  ghcr.io/drewlane-dev/orderbook-ui@sha256:...
+```
+
+Each e2e leg used to build those images itself, so what got tested was
+assembled on the agent, existed only there, and no leg could prove it matched
+any other. Now every leg runs the exact bytes the run produced.
+
+A **digest**, not a tag, and the fixture refuses a tag outright — a tag can be
+moved between the push and the pull by a concurrent run of this same pipeline,
+which would leave the guarantee silently untrue.
+
+The facade host image is not built here, but the same job resolves its tag to a
+digest so the integration legs get the same property. Its tag lives in
+`facade-host.image`, read by both the workflow and the fixture, because a
+version string in two places drifts — and drifts in the worst direction, since
+the pipeline's value wins and the tests would quietly run an old host.
+
+Unset means a developer's machine: build locally, no registry needed.
+
 **A suite is a `.slnf`**, and CI packs one per call:
 
 ```powershell

@@ -15,7 +15,20 @@ namespace OrderBook.Tests;
 /// </summary>
 public sealed class IntegrationFixture
 {
-    private const string HostImage = "ghcr.io/drewlane-dev/remote-facade-host:3.3.2";
+    /// <summary>
+    /// The facade host image. Not built by this repo, but still pinned by CI:
+    /// the pipeline resolves the tag to a digest once, up front, so every leg
+    /// runs the same host and a tag moving mid-run cannot go unnoticed.
+    ///
+    /// The tag itself lives in facade-host.image at the repo root, read here
+    /// and by the workflow, because a version string in both places drifts --
+    /// and drifts silently in the worst direction, since the pipeline's value
+    /// wins and the tests would run an old host while the source said new.
+    /// </summary>
+    private static string HostImage =>
+        Images.Pinned("FACADE_HOST_IMAGE")
+        ?? File.ReadAllText(Path.Combine(
+            CommonDirectoryPath.GetGitDirectory().DirectoryPath, "facade-host.image")).Trim();
 
     private INetwork _network = null!;
     private Sql _sql = null!;

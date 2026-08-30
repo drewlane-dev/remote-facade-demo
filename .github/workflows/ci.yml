@@ -39,6 +39,76 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Every image the legs run is built ONCE here, pushed, and passed on as a
+  # digest. Previously each e2e leg built the API and web images itself, so
+  # what got tested was assembled on the agent, existed only there, and no leg
+  # could prove it matched any other. Now the legs run the exact bytes this run
+  # produced -- and a digest, not a tag, because a tag can be moved between the
+  # push and the pull by a concurrent run of this same pipeline.
+  images:
+    name: Build images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      api: ${{ steps.refs.outputs.api }}
+      web: ${{ steps.refs.outputs.web }}
+      host: ${{ steps.refs.outputs.host }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Context is the repo root: both Dockerfiles COPY from src/, so a
+      # per-project context would not see what they reference.
+      - id: api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/OrderBook.Api/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/orderbook-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - id: web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/OrderBook.Ui/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/orderbook-ui:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - id: refs
+        name: Collect digest references
+        run: |
+          set -euo pipefail
+          owner="${{ github.repository_owner }}"
+          echo "api=ghcr.io/$owner/orderbook-api@${{ steps.api.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "web=ghcr.io/$owner/orderbook-ui@${{ steps.web.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+          # The facade host is NOT built here -- it is a published release of
+          # another repo -- but pinning it costs one lookup and gives the
+          # integration legs the same guarantee: every leg runs one known host,
+          # and the tag cannot move underneath the run.
+          tag="$(cat facade-host.image)"
+          digest="$(docker buildx imagetools inspect "$tag" | awk '/^Digest:/{print $2}')"
+          echo "host=${tag%:*}@$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Show what the legs will run
+        run: |
+          echo "api  ${{ steps.refs.outputs.api }}"
+          echo "web  ${{ steps.refs.outputs.web }}"
+          echo "host ${{ steps.refs.outputs.host }}"
+
   discover:
     name: Discover suites
     runs-on: ubuntu-latest
@@ -73,8 +143,13 @@ jobs:
 
   integration:
     name: ${{ matrix.leg.name }}
-    needs: discover
+    needs: [discover, images]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      FACADE_HOST_IMAGE: ${{ needs.images.outputs.host }}
     strategy:
       # Every leg reports. Stopping the others on one failure hides whether the
       # problem is one class or the shared environment.
@@ -86,6 +161,14 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
+
+      # Testcontainers pulls through the Docker DAEMON, not through the .NET
+      # process, so the credentials have to be on the daemon.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # matrix.leg.args is a ready-made --filter expression, so the tags on one
       # leg run in a SINGLE process and share the one [AssemblyInitialize]
@@ -114,8 +197,14 @@ jobs:
 
   e2e:
     name: ${{ matrix.leg.name }}
-    needs: discover
+    needs: [discover, images]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      E2E_API_IMAGE: ${{ needs.images.outputs.api }}
+      E2E_WEB_IMAGE: ${{ needs.images.outputs.web }}
     strategy:
       fail-fast: false
       matrix:
@@ -125,6 +214,14 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
+
+      # Testcontainers pulls through the Docker DAEMON, not through the .NET
+      # process, so the credentials have to be on the daemon.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Each leg builds its OWN facade, web app and browser. Testcontainers
       # randomises names, networks and host ports, so nothing needs coordinating
