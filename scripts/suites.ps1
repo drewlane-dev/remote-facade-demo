@@ -1,69 +1,14 @@
 #!/usr/bin/env pwsh
-<#
-.SYNOPSIS
-    Emit the CI legs for ONE test suite.
 
-.DESCRIPTION
-    Given a solution or solution filter, this finds the test projects inside
-    it, reads their test classes, and packs those classes into legs for a
-    build matrix. One suite per call:
-
-        suites.ps1 -Sln integration.slnf -MaxParallel 2
-        suites.ps1 -Sln e2e.slnf         -MaxParallel 1
-
-    Two calls rather than one that discovers everything, because a suite's
-    filter and its parallelism are decided together and belong in the same
-    line. It also means the cap is a plain number instead of a per-suite
-    string, and each caller reads as what it is.
-
-    Which projects are runners is asked of MSBuild --
-    IsTestingPlatformApplication, set by the test SDK -- rather than matched by
-    name. Names do not discriminate here: e2e.slnf also contains OrderBook.Api,
-    which is also an Exe, and OrderBook.Tests.Shared, which is also called
-    *Tests. A name pattern has to be kept correct by hand as projects are added
-    and renamed; this cannot go stale.
-
-    Class names come from the runner's own structured output:
-
-        <exe> -list classes/json -noColor -noLogo
-
-    -noColor and -noLogo matter. Without them the runner prints a banner and
-    wraps its output in ANSI codes, and an earlier version of this parsed that
-    text: the banner begins with a letter and contains dots, so it was admitted
-    as a test class and produced matrix legs named "(64-bit" and "xUnit.net".
-
-    A filter holding no runner is fatal. A suite that silently produced no legs
-    would leave a green pipeline that ran nothing, which is the failure this
-    whole arrangement exists to prevent.
-
-.PARAMETER Sln
-    The .slnx or .slnf to read projects from. A filter is the usual choice:
-    it is already what CI builds for that suite, so the projects that get
-    built and the projects that get run cannot drift apart.
-
-
-.PARAMETER MaxParallel
-    Most legs to produce PER TEST PROJECT. Omitted or 0 means one class per leg.
-
-    Per project rather than per suite because a leg runs one executable, so a
-    cap spanning several runners would have to be divided among them. Every
-    filter here holds exactly one runner and the two readings coincide; pass a
-    whole .slnx with two runners and a cap of 3 and you get up to six legs, not
-    three.
-
-    Classes on one leg run in a single process and share their collection's
-    fixture, so packing an expensive suite avoids rebuilding its containers
-    per leg. Measured on this repo, an e2e leg is 94-99% fixture setup, which
-    is why e2e is packed to a single leg and integration is not.
-
-.PARAMETER Ado
-    Emit Azure DevOps' matrix shape -- an object keyed by leg name -- instead
-    of the array GitHub Actions consumes.
-#>
+#generate a matrix of test legs for a slnx or slnf
+#-Granularity Class (default) splits by test class, packed down to -MaxParallel
+#-Granularity Project splits by test project and never lists classes
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $Sln,
     [string] $Suite,
+    [ValidateSet('Class', 'Project')]
+    [string] $Granularity   = 'Class',
     [string] $Configuration = 'Release',
     [int]    $MaxParallel   = 0,
     [switch] $Ado
@@ -72,6 +17,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+if ($Granularity -eq 'Project' -and $MaxParallel -gt 0) {
+    throw ("-MaxParallel does not apply at Project granularity: a leg runs one " +
+           "executable, so the leg count is the number of test projects and " +
+           "cannot be capped below it. Drop one of the two.")
+}
+
 $slnPath = Resolve-Path $Sln
 $root    = Split-Path -Parent $slnPath
 
@@ -79,8 +30,8 @@ $root    = Split-Path -Parent $slnPath
 # integration.slnf yields integration_1, integration_2.
 if (-not $Suite) { $Suite = [IO.Path]::GetFileNameWithoutExtension($slnPath) }
 
+# List all projects in a slnx or slnf
 function Get-Projects {
-    <# Project paths out of a .slnx (XML) or a .slnf (JSON), repo-relative. #>
     param([string] $Path)
 
     $paths = if ($Path -like '*.slnx') {
@@ -94,14 +45,9 @@ function Get-Projects {
     $paths | ForEach-Object { $_ -replace '\\', '/' }
 }
 
-function Test-IsRunner {
-    <#
-    Whether MSBuild considers this project something that can run tests.
-
-    A SINGLE -getProperty prints the bare value; ask for two or more and it
-    switches to a JSON envelope instead. Nothing here wants the envelope, so
-    this reads the one line and compares it.
-    #>
+# ask msbuild if this is a test project
+function Get-IsTestProject {
+    
     param([string] $Project)
 
     $value = dotnet msbuild (Join-Path $root $Project) `
@@ -110,17 +56,8 @@ function Test-IsRunner {
     ($LASTEXITCODE -eq 0) -and (($value | Select-Object -First 1) -eq 'true')
 }
 
+# generate matrix identifier for pipeline leg
 function ConvertTo-Identifier {
-    <#
-    Azure DevOps matrix configuration names accept only letters, digits and
-    underscores, must start with a letter, and cap at 100 characters. A leg
-    called "integration-1" is therefore rejected outright, before a single test
-    runs -- which is exactly how the first real ADO run of this failed.
-
-    Sanitising here rather than demanding it of whoever names a filter, and
-    applied to both output shapes so a leg is called the same thing on either
-    platform.
-    #>
     param([string] $Name)
 
     $safe = $Name -replace '[^A-Za-z0-9_]', '_'
@@ -156,29 +93,31 @@ function Split-Evenly {
     ,$groups
 }
 
-function Get-Runner {
-    <# The built runner for a project: its executable and its test classes. #>
+# find the built runner; the framework folder is globbed so a TFM bump needs no edit
+function Get-Exe {
     param([string] $Project)
 
     $name = [IO.Path]::GetFileNameWithoutExtension($Project)
-
-    # The framework folder is globbed rather than named, so a TFM bump needs no
-    # edit here.
     $pattern = Join-Path $root (Split-Path -Parent $Project) "bin/$Configuration/*/$name"
     $exe = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
-
     if (-not $exe) {
         throw "$name has no $Configuration build at $pattern. Build $Sln first."
     }
 
-    [pscustomobject] @{
-        Exe     = [IO.Path]::GetRelativePath($root, $exe.FullName)
-        Classes = @(& $exe.FullName -list classes/json -noColor -noLogo | ConvertFrom-Json | Sort-Object)
-    }
+    $exe.FullName
 }
 
-$projects = @(Get-Projects $slnPath | Where-Object { Test-IsRunner $_ })
+# list classes from the runner's own output; EXECUTES the test binary, so this is
+# the one part of discovery that scales with the suite, and Project skips it
+function Get-Classes {
+    param([string] $Exe)
 
+    @(& $Exe -list classes/json -noColor -noLogo | ConvertFrom-Json | Sort-Object)
+}
+
+$projects = @(Get-Projects $slnPath | Where-Object { Get-IsTestProject $_ })
+
+# no test projects found in the solution or solution filter
 if (-not $projects) {
     throw (@(
         "no project in $Sln is a test project (IsTestingPlatformApplication)."
@@ -189,26 +128,41 @@ if (-not $projects) {
 
 $legs = [System.Collections.Generic.List[object]]::new()
 
+function New-Leg {
+    param([string] $Exe, [string] $LegArgs, [string] $Classes)
+
+    [pscustomobject] @{
+        name  = "$(ConvertTo-Identifier $Suite)_$($legs.Count + 1)"
+        suite = $Suite
+        exe   = [IO.Path]::GetRelativePath($root, $Exe)
+        # Ready-made arguments, so a pipeline never builds them from an array
+        # in YAML. Classes on one leg run in a SINGLE process and therefore
+        # share whatever fixture their collection defines.
+        args    = $LegArgs
+        classes = $Classes
+    }
+}
+
 foreach ($project in $projects) {
-    $runner = Get-Runner $project
+    $exe = Get-Exe $project
+
+    if ($Granularity -eq 'Project') {
+        # No -class arguments at all: the runner runs everything it has. The
+        # class list is never read, so the test binary is not executed here.
+        $legs.Add((New-Leg -Exe $exe -LegArgs '' -Classes ([IO.Path]::GetFileNameWithoutExtension($project))))
+        continue
+    }
 
     # Assigned first, then iterated. Split-Evenly returns its groups
     # comma-wrapped to survive assignment, and that same wrapper makes
     # `foreach (... in Split-Evenly ...)` yield ONE item -- the whole array --
     # so every class would land on a single leg.
-    $groups = Split-Evenly -Items $runner.Classes -Into $MaxParallel
+    $groups = Split-Evenly -Items (Get-Classes $exe) -Into $MaxParallel
 
     foreach ($group in $groups) {
-        $legs.Add([pscustomobject] @{
-            name  = "$(ConvertTo-Identifier $Suite)_$($legs.Count + 1)"
-            suite = $Suite
-            exe   = $runner.Exe
-            # Ready-made arguments, so a pipeline never builds them from an
-            # array in YAML. Classes on one leg run in a SINGLE process and
-            # therefore share whatever fixture their collection defines.
-            args    = (($group | ForEach-Object { "-class `"$_`"" }) -join ' ')
-            classes = ($group -join ' ')
-        })
+        $legs.Add((New-Leg -Exe $exe `
+            -LegArgs (($group | ForEach-Object { "-class `"$_`"" }) -join ' ') `
+            -Classes ($group -join ' ')))
     }
 }
 

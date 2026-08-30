@@ -235,6 +235,21 @@ containers. Split across legs they each rebuild SQL Server, the API, the
 Angular host and a browser — which is 94–99% of a leg's wall-clock. Split where
 the fixture is cheap; pack where it is expensive.
 
+**Granularity** controls how finely a suite splits:
+
+```powershell
+scripts/suites.ps1 -Sln integration.slnf -MaxParallel 2            # by class
+scripts/suites.ps1 -Sln integration.slnf -Granularity Project      # by csproj
+```
+
+`Project` is the coarse option for suites whose projects are large. It emits
+one leg per test project with no `-class` arguments, and never reads the class
+list — so discovery does not execute the test binaries at all, and a project
+with hundreds of classes does not turn into a command line thousands of
+characters long. `-MaxParallel` does not apply there: a leg runs one
+executable, so the leg count *is* the project count and cannot be capped below
+it. Passing both is refused rather than quietly ignored.
+
 Which projects inside the filter are runners is asked of MSBuild —
 `IsTestingPlatformApplication`, set by the test SDK — rather than matched by
 name. Names do not discriminate here: `e2e.slnf` also contains `OrderBook.Api`,
