@@ -59,7 +59,7 @@ jobs:
         name: Pack the integration suite
         shell: pwsh
         run: |
-          $legs = ./scripts/suites.ps1 -Sln integration.slnf -Tags domain,graph
+          $legs = ./scripts/suites.ps1 -Sln integration.slnf
           $legs
           "legs=$legs" >> $env:GITHUB_OUTPUT
 
@@ -67,7 +67,7 @@ jobs:
         name: Pack the e2e suite
         shell: pwsh
         run: |
-          $legs = ./scripts/suites.ps1 -Sln e2e.slnf -Tags journey
+          $legs = ./scripts/suites.ps1 -Sln e2e.slnf
           $legs
           "legs=$legs" >> $env:GITHUB_OUTPUT
 

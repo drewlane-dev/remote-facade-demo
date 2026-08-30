@@ -224,12 +224,15 @@ solution filters so a runner builds only what its layer needs.
 **A suite is a `.slnf`**, and CI packs one per call:
 
 ```powershell
-scripts/suites.ps1 -Sln integration.slnf -Tags domain,graph
-scripts/suites.ps1 -Sln e2e.slnf         -Tags journey
+scripts/suites.ps1 -Sln integration.slnf
+scripts/suites.ps1 -Sln e2e.slnf
 ```
 
 The split is expressed in `[TestCategory]` tags on the test classes, one leg
-per tag. That is not a style choice: **MSTest cannot list test class names
+per tag, and the tags are **read out of the built assembly** — nothing names
+them twice. A declared list could only ever say the same thing as the code or
+say less, and saying less is the failure this whole arrangement exists to
+prevent. That is not a style choice: **MSTest cannot list test class names
 without running the tests** — `--list-tests` reports method names only, and
 `--report-trx` is rejected alongside it — so classes are not addressable ahead
 of a run. Tags are, and `--filter` works during discovery, which turns out to
@@ -243,12 +246,14 @@ where it is expensive.
 `-MaxParallel` packs several tags onto one leg by OR-ing them into a single
 filter, so the cap still means "at most this many legs".
 
-**Every test must carry exactly one of the tags**, and the script proves it
-before emitting a matrix — without running anything:
+**Every test must carry exactly one tag**, and the script proves it before
+emitting a matrix — without running anything. Metadata proposes the tag list;
+the test framework verifies it, so a tag the reader missed fails loudly rather
+than dropping tests off the matrix:
 
 ```
 OrderBook.IntegrationTests has 4 test(s) carrying none of: domain.
-They would run on no leg. Tag them, or add their tag to -Tags.
+They would run on no leg. Tag them with one of those.
 ```
 
 Both directions are checked, and the second only means something because of

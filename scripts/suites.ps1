@@ -1,12 +1,12 @@
 #!/usr/bin/env pwsh
 
 #generate a matrix of test legs for a slnx or slnf
-#-Granularity Tag (default) splits by [TestCategory], packed down to -MaxParallel
+#-Granularity Tag (default) splits by [TestCategory], discovered from the built
+# assembly, packed down to -MaxParallel
 #-Granularity Project splits by test project and ignores tags entirely
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $Sln,
-    [string[]] $Tags = @(),
     [string] $Suite,
     [ValidateSet('Tag', 'Project')]
     [string] $Granularity   = 'Tag',
@@ -17,16 +17,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-# `pwsh -File` passes every argument as a literal STRING with no expression
-# evaluation, so -Tags domain,graph arrives as one element, not two, and the
-# filter becomes TestCategory!=domain,graph -- which matches everything.
-# Splitting here accepts both that form and a real array from -Command.
-$Tags = @($Tags | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-
-if ($Granularity -eq 'Tag' -and -not $Tags) {
-    throw "-Tags is required at Tag granularity. Use -Granularity Project to run whole projects."
-}
 
 if ($Granularity -eq 'Project' -and $MaxParallel -gt 0) {
     throw ("-MaxParallel does not apply at Project granularity: a leg runs one " +
@@ -117,6 +107,46 @@ function Get-Exe {
     $exe.FullName
 }
 
+# read [TestCategory("...")] values straight out of the assembly, without
+# loading or executing it
+#
+# This only PROPOSES the tag list. The coverage guard below then asks the test
+# framework itself whether anything falls outside it, so a tag this misses
+# fails loudly rather than dropping tests off the matrix.
+#
+# TestCategoryAttribute has exactly one constructor, (string), so the attribute
+# blob is always a 2-byte prolog followed by one serialized string.
+function Get-DeclaredTags {
+    param([string] $Dll)
+
+    $tags = [System.Collections.Generic.SortedSet[string]]::new()
+    $stream = [IO.File]::OpenRead($Dll)
+
+    try {
+        $pe = [System.Reflection.PortableExecutable.PEReader]::new($stream)
+        $md = [System.Reflection.Metadata.PEReaderExtensions]::GetMetadataReader($pe)
+
+        foreach ($handle in $md.CustomAttributes) {
+            $attribute = $md.GetCustomAttribute($handle)
+            if ($attribute.Constructor.Kind -ne 'MemberReference') { continue }
+
+            $member = $md.GetMemberReference([System.Reflection.Metadata.MemberReferenceHandle]$attribute.Constructor)
+            if ($member.Parent.Kind -ne 'TypeReference') { continue }
+
+            $type = $md.GetTypeReference([System.Reflection.Metadata.TypeReferenceHandle]$member.Parent)
+            if ($md.GetString($type.Name) -ne 'TestCategoryAttribute') { continue }
+
+            $blob = $md.GetBlobReader($attribute.Value)
+            $null = $blob.ReadUInt16()
+            $value = $blob.ReadSerializedString()
+            if ($value) { [void] $tags.Add($value) }
+        }
+    }
+    finally { $stream.Dispose() }
+
+    ,@($tags)
+}
+
 # count matching tests WITHOUT running them: --list-tests honours --filter, so
 # every guard below costs a discovery pass and no test execution
 function Measure-Tests {
@@ -173,27 +203,38 @@ foreach ($project in $projects) {
         throw "$name contains no tests. Remove it from $Sln."
     }
 
+    # No tag list is passed in. Every test must carry a tag and every tag gets a
+    # leg, so naming them would only be a second copy of what the assembly
+    # already states -- and a copy that says LESS is the one failure this
+    # arrangement exists to prevent.
+    $suiteTags = Get-DeclaredTags "$exe.dll"
+
+    if (-not $suiteTags) {
+        throw ("$name has no [TestCategory] on any test class, so there is nothing " +
+               "to split by. Tag its classes, or use -Granularity Project.")
+    }
+
     # A test carrying none of the tags runs on no leg, which from the outside
     # is indistinguishable from a leg that passed.
-    $uncoveredFilter = ($Tags | ForEach-Object { "TestCategory!=$_" }) -join '&'
+    $uncoveredFilter = ($suiteTags | ForEach-Object { "TestCategory!=$_" }) -join '&'
     $uncovered = Measure-Tests -Exe $exe -Filter $uncoveredFilter
     if ($uncovered -gt 0) {
-        throw ("$name has $uncovered test(s) carrying none of: $($Tags -join ', '). " +
-               "They would run on no leg. Tag them, or add their tag to -Tags.")
+        throw ("$name has $uncovered test(s) carrying none of: $($suiteTags -join ', '). " +
+               "They would run on no leg. Tag them with one of those.")
     }
 
     # Sum-vs-total catches the opposite fault, a test in TWO tags running twice.
     # It is only conclusive BECAUSE uncovered is already known to be zero: an
     # untagged test and an overlapping one cancel out exactly, and a sum check
     # alone then passes while a test runs nowhere.
-    $perTag = @($Tags | ForEach-Object { Measure-Tests -Exe $exe -Filter "TestCategory=$_" })
+    $perTag = @($suiteTags | ForEach-Object { Measure-Tests -Exe $exe -Filter "TestCategory=$_" })
     $sum = ($perTag | Measure-Object -Sum).Sum
     if ($sum -ne $total) {
-        throw ("$name has tests in more than one of: $($Tags -join ', ') " +
+        throw ("$name has tests in more than one of: $($suiteTags -join ', ') " +
                "($sum tagged across $total tests). They would run on several legs.")
     }
 
-    $groups = Split-Evenly -Items $Tags -Into $MaxParallel
+    $groups = Split-Evenly -Items $suiteTags -Into $MaxParallel
 
     foreach ($group in $groups) {
         $filter = ($group | ForEach-Object { "TestCategory=$_" }) -join '|'
