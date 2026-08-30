@@ -64,12 +64,17 @@ stages:
             inputs:
               version: '10.0.x'
 
+          # SUITE, LEG, EXE and ARGS all come from the matrix, so nothing here
+          # reconstructs them. An earlier version recovered the filter name by
+          # sed-stripping a trailing "-<n>" off Agent.JobName, which for a
+          # matrix job is the DISPLAY name ("Suite integration_1"), not the
+          # matrix key -- it was guessing at a value the matrix already had.
           - script: |
               set -eu
-              dotnet build "$(echo "$(Agent.JobName)" | sed "s/-[0-9]*$//").slnf" -c Release
+              dotnet build "$(SUITE).slnf" -c Release
               "$(EXE)" \
                 $(ARGS) \
-                -trx "$(Agent.JobName).trx"
+                -trx "$(LEG).trx"
             displayName: Run $(SUITE) / $(CLASSES)
 
           # ADO aggregates TRX from every leg into one test run, which is the

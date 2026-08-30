@@ -143,6 +143,26 @@ function Split-Evenly {
     ,$groups
 }
 
+function ConvertTo-Identifier {
+    <#
+    Azure DevOps matrix configuration names accept only letters, digits and
+    underscores, must start with a letter, and cap at 100 characters. A leg
+    called "integration-1" is therefore rejected outright, before a single test
+    runs -- so the hyphen this used to emit would have failed the pipeline on
+    its first execution.
+
+    Sanitising here rather than demanding it of whoever adds a filter: suite
+    names come from .slnf FILE names, which carry no such rule. Applied to both
+    output shapes so a leg is called the same thing on either platform.
+    #>
+    param([string] $Name)
+
+    $safe = $Name -replace '[^A-Za-z0-9_]', '_'
+    if ($safe -notmatch '^[A-Za-z]') { $safe = "suite_$safe" }
+    if ($safe.Length -gt 100) { $safe = $safe.Substring(0, 100) }
+    $safe
+}
+
 function Get-Runner {
     <# The built runner for a project: its executable and its test classes. #>
     param([string] $Project)
@@ -215,7 +235,7 @@ foreach ($suite in $suites.Keys) {
 
         foreach ($group in $groups) {
             $legs.Add([pscustomobject] @{
-                name = "$suite-$($legs.Count + 1)"
+                name = "$(ConvertTo-Identifier $suite)_$($legs.Count + 1)"
                 exe  = $runner.Exe
                 # Ready-made arguments, so a pipeline never builds them from an
                 # array in YAML. Classes on one leg run in a SINGLE process and
@@ -232,10 +252,18 @@ foreach ($suite in $suites.Keys) {
 if ($Ado) {
     # Azure DevOps wants one flat object keyed by a unique leg name.
     $flat = [ordered] @{}
-    foreach ($legs in $matrix.Values) {
-        foreach ($leg in $legs) {
+    foreach ($suite in $matrix.Keys) {
+        foreach ($leg in $matrix[$suite]) {
+            # Two suite names can sanitise to one identifier ("a-b" and "a_b"),
+            # and this shape is keyed by leg name, so the second would silently
+            # replace the first and its tests would run nowhere.
+            if ($flat.Contains($leg.name)) {
+                throw "two suites produce the matrix key '$($leg.name)'. Rename one .slnf."
+            }
+
             $flat[$leg.name] = [pscustomobject] @{
-                EXE = $leg.exe; ARGS = $leg.args; CLASSES = $leg.classes
+                SUITE = $suite; LEG = $leg.name
+                EXE   = $leg.exe; ARGS = $leg.args; CLASSES = $leg.classes
             }
         }
     }
