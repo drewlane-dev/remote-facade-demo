@@ -34,7 +34,12 @@ stages:
           # Publishing the matrix as an output variable is what lets the next
           # stage fan out over something computed rather than something typed.
           - pwsh: |
-              $matrix = ./scripts/suites.ps1 -MaxParallel default=2,e2e=1 -Ado
+              # Quoted: unquoted, PowerShell reads default=2,e2e=1 as an ARRAY
+              # -- the comma is the array operator -- and it cannot bind to a
+              # [string] parameter. GitHub Actions passes this through an
+              # environment variable, so it is already a string there and the
+              # quoting only matters here.
+              $matrix = ./scripts/suites.ps1 -MaxParallel 'default=2,e2e=1' -Ado
               Write-Host "matrix: $matrix"
               Write-Host "##vso[task.setvariable variable=matrix;isOutput=true]$matrix"
             name: emit
