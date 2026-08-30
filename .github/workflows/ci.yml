@@ -10,16 +10,16 @@ name: ci
 # dominated by bringing the environment up, so splitting evenly by test count
 # would have every runner pay the same setup for a fraction of the work.
 #
-# Nothing here lists the classes. scripts/suites.py reads them out of the built
-# assembly and refuses to emit a matrix at all if a class belongs to no suite --
-# because a class that runs on no runner is indistinguishable from one that
-# passes.
+# Nothing here lists the classes. scripts/suites.sh reads them out of the built
+# assemblies. A suite IS a test project, so nothing in the test code declares
+# which one it belongs to -- and the guard checks the SOLUTION instead: a test
+# project no runner would take is fatal, because running nowhere is
+# indistinguishable from passing.
 #
-# MAX_PARALLEL caps the legs PER SUITE and packs the classes into them. e2e is
-# capped at 1 deliberately: its classes share a collection, so one leg runs them
-# in a single process against ONE set of containers. Split across two legs they
-# each rebuilt a facade, a web app and a browser -- measured at 95s and 91s,
-# almost entirely setup, against ~95s for both together.
+# MAX_PARALLEL caps the legs PER SUITE. e2e is capped at 1 deliberately: its
+# classes share a collection, so one leg runs them in a single process against
+# ONE set of containers. Split across legs they each rebuild SQL Server, the
+# API, the Angular host and a browser, which is 94-99% of a leg's wall-clock.
 on:
   push:
     branches: [main]
@@ -41,13 +41,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Best-effort: a miss just falls back to balancing by test count, which
-      # is why nothing here fails when the cache is cold.
-      - uses: actions/cache/restore@v4
-        with:
-          path: timings.json
-          key: timings-${{ github.run_id }}
-          restore-keys: timings-
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
@@ -59,11 +52,10 @@ jobs:
         name: Enumerate and pack suites (fails if a class has no suite)
         run: |
           set -euo pipefail
-          MATRIX="$(./scripts/suites.py \
-            tests/OrderBook.IntegrationTests/bin/Release/net10.0/OrderBook.IntegrationTests \
-            tests/OrderBook.E2ETests/bin/Release/net10.0/OrderBook.E2ETests \
-            --max-parallel "$MAX_PARALLEL" \
-            --timings timings.json)"
+          MATRIX="$(./scripts/suites.sh \
+            integration=tests/OrderBook.IntegrationTests/bin/Release/net10.0/OrderBook.IntegrationTests \
+            e2e=tests/OrderBook.E2ETests/bin/Release/net10.0/OrderBook.E2ETests \
+            --max-parallel "$MAX_PARALLEL")"
           echo "$MATRIX"
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
@@ -97,16 +89,13 @@ jobs:
           dotnet build ${{ matrix.filter }} -c Release
           "${{ matrix.leg.exe }}" \
             ${{ matrix.leg.args }} \
-            -trx "${{ matrix.leg.name }}.trx" \
-            -xml "${{ matrix.leg.name }}.xml"
+            -trx "${{ matrix.leg.name }}.trx"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: results-${{ matrix.leg.name }}
-          path: |
-            *.trx
-            *.xml
+          path: '*.trx' 
           if-no-files-found: error
 
   e2e:
@@ -140,50 +129,11 @@ jobs:
           dotnet build ${{ matrix.filter }} -c Release
           "${{ matrix.leg.exe }}" \
             ${{ matrix.leg.args }} \
-            -trx "${{ matrix.leg.name }}.trx" \
-            -xml "${{ matrix.leg.name }}.xml"
+            -trx "${{ matrix.leg.name }}.trx"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: results-${{ matrix.leg.name }}
-          path: |
-            *.trx
-            *.xml
+          path: '*.trx' 
           if-no-files-found: error
-
-  timings:
-    name: Record timings
-    needs: [integration, e2e]
-    # Always: a failing leg still produces timings for the ones that ran, and
-    # losing them would make the next run's balancing worse precisely when the
-    # suite is already unhappy.
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/cache/restore@v4
-        with:
-          path: timings.json
-          key: timings-${{ github.run_id }}
-          restore-keys: timings-
-
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: results-*
-          merge-multiple: true
-
-      # An exponentially weighted average, so a class that gets slower shows up
-      # within a few runs rather than being diluted by history.
-      - name: Fold this run into the rolling averages
-        run: ./scripts/timings.py timings.json *.xml
-
-      - run: cat timings.json
-
-      # Keyed by run id and restored by prefix, so every run reads the most
-      # recent entry and writes a new one. GitHub evicts the old ones.
-      - uses: actions/cache/save@v4
-        with:
-          path: timings.json
-          key: timings-${{ github.run_id }}

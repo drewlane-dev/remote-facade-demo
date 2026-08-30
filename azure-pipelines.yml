@@ -2,7 +2,7 @@
 #
 # The matrix is NOT written here. A hand-maintained list drifts the moment
 # someone adds a test class, and it drifts silently: the class runs on no agent,
-# every leg stays green, and nothing reports that coverage shrank. scripts/suites.py
+# every leg stays green, and nothing reports that coverage shrank. scripts/suites.sh
 # reads the suites out of the compiled tests and refuses to emit a matrix at all
 # if any class belongs to none.
 
@@ -34,9 +34,9 @@ stages:
           # stage fan out over something computed rather than something typed.
           - script: |
               set -eu
-              MATRIX="$(./scripts/suites.py \
-                tests/OrderBook.IntegrationTests/bin/Release/net10.0/OrderBook.IntegrationTests \
-                tests/OrderBook.E2ETests/bin/Release/net10.0/OrderBook.E2ETests \
+              MATRIX="$(./scripts/suites.sh \
+                integration=tests/OrderBook.IntegrationTests/bin/Release/net10.0/OrderBook.IntegrationTests \
+                e2e=tests/OrderBook.E2ETests/bin/Release/net10.0/OrderBook.E2ETests \
                 --max-parallel default=2,e2e=1 --ado)"
               echo "matrix: $MATRIX"
               echo "##vso[task.setvariable variable=matrix;isOutput=true]$MATRIX"
@@ -69,7 +69,7 @@ stages:
 
           - script: |
               set -eu
-              dotnet build "$(SUITE).slnf" -c Release
+              dotnet build "$(echo "$(Agent.JobName)" | sed "s/-[0-9]*$//").slnf" -c Release
               "$(EXE)" \
                 $(ARGS) \
                 -trx "$(Agent.JobName).trx"

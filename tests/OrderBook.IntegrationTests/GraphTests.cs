@@ -6,7 +6,6 @@ namespace OrderBook.Tests;
 /// What the composition root gives you: substitution, per-container
 /// configuration, and resolution failures that name what exists.
 /// </summary>
-[Trait(Suites.Name, Suites.Integration)]
 [Collection(IntegrationCollection.Name)]
 public class GraphTests(IntegrationFixture fixture)
 {

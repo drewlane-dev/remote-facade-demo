@@ -7,7 +7,6 @@ namespace OrderBook.Tests;
 /// client-side, so a hard navigation exercises nginx's fallback as well as the
 /// router.
 /// </summary>
-[Trait(Suites.Name, Suites.E2E)]
 [Collection(E2ECollection.Name)]
 public class NavigationTests(E2EFixture fixture)
 {

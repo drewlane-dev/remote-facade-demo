@@ -6,7 +6,6 @@ namespace OrderBook.Tests;
 /// The domain, driven through the facade against a real SQL Server. No API, no
 /// browser -- this is where behaviour belongs.
 /// </summary>
-[Trait(Suites.Name, Suites.Integration)]
 [Collection(IntegrationCollection.Name)]
 public class DomainTests(IntegrationFixture fixture)
 {

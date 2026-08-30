@@ -10,7 +10,6 @@ namespace OrderBook.Tests;
 /// DATABASE. A page can show the right text for the wrong reason -- a stale
 /// render, a cached response, a mocked layer -- and the row cannot.
 /// </summary>
-[Trait(Suites.Name, Suites.E2E)]
 [Collection(E2ECollection.Name)]
 public class OrderPlacementTests(E2EFixture fixture)
 {

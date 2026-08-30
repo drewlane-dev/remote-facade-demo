@@ -219,83 +219,35 @@ loads it as a plugin published by `RemoteFacade.Client`'s MSBuild target; the
 API references it directly.
 
 `OrderBook.slnx` holds every project, and `integration.slnf` / `e2e.slnf` are
-solution filters so a runner builds only what its layer needs — an integration
-runner has no reason to compile the API or the Angular host project.
+solution filters so a runner builds only what its layer needs.
 
-Suites are declared as traits and discovered from the **built assemblies**:
-
-```csharp
-[Trait(Suites.Name, Suites.E2E)]
-[Collection(E2ECollection.Name)]
-public class NavigationTests { ... }
-```
+**A suite is a project.** Nothing in the test code declares which suite it
+belongs to — the assembly already says it:
 
 ```bash
-scripts/suites.py <integration-exe> <e2e-exe> --max-parallel default=2,e2e=1
+scripts/suites.sh \
+  integration=<integration-exe> \
+  e2e=<e2e-exe> \
+  --max-parallel default=2,e2e=1
 ```
 
-Nothing lists the classes in YAML. A hand-maintained matrix drifts the moment
-someone adds a test class, and it drifts *silently* — the class runs on no
-runner, every leg stays green, and nothing reports that coverage shrank. So the
-script **fails rather than emitting a matrix** when a class belongs to no suite.
+Class names come from the runner's own `-list classes/json`, so nothing parses
+source or scrapes text.
 
-Each leg records which executable to run, because a single process cannot span
-assemblies.
+`--max-parallel` caps the legs **per suite**. `e2e=1` is deliberate: its classes
+share a collection, so one leg runs them in a single process against **one** set
+of containers. Split across legs they each rebuild SQL Server, the API, the
+Angular host and a browser — which is 94–99% of a leg's wall-clock. Split where
+the fixture is cheap; pack where it is expensive.
 
-### Controlling how many runners
-
-`--max-parallel` caps the legs **per suite** and packs classes into them:
-
-```bash
-scripts/suites.py <exe> --max-parallel default=2,e2e=1
-```
-
-Six classes at `default=3` become three legs, balanced by test count — a class
-is never split, so one huge class simply gets its own leg.
-
-Packing is not just about runner count. Classes on one leg run in a **single
-process**, so classes sharing a collection share **one fixture** — which is the
-cost that dominates a container suite. Measured here: the two e2e classes as
-separate legs took 95s and 91s, almost entirely fixture setup, against ~95s for
-both packed together. Splitting them cost an extra runner and saved nothing.
-
-The rule of thumb: split by class where the fixture is cheap, pack where it is
-expensive. That is why this repo runs `default=2,e2e=1`.
-
-### Balancing by measured runtime
-
-Each leg writes xUnit XML; a final job folds it into a rolling `timings.json`
-(exponentially weighted, so a class that gets slower shows up within a few runs)
-and caches it. The next run balances by recorded runtime instead of test count.
-
-The subtlety is that **a leg has two costs**, and only one is per-class:
+Nothing lists the classes in YAML, and the guard now watches the **solution**: a
+test project no runner would take is fatal, because running nowhere is
+indistinguishable from passing.
 
 ```
-leg cost  ≈  fixture setup (once per leg)  +  Σ test time of its classes
+These test projects are in OrderBook.slnx but no runner would take them:
+  OrderBook.E2ETests
 ```
-
-Measured here, the fixture is **94–99%** of a leg:
-
-```
-integration leg:  5.8s wall |  0.07s test time |  5.7s fixture
-e2e leg:         11.8s wall |  0.70s test time | 11.1s fixture
-```
-
-So weighting by test time alone would balance the remaining few percent. The
-script reports what a split actually buys:
-
-```
-e2e: 2 leg(s), slowest ~11.7s (fixture 11.2s + tests)
-    vs 1 leg at ~11.9s: saves 0.2s for 1 extra runner(s) — probably not worth it
-```
-
-A class with no history is weighted at the **median** of the known ones, not
-zero — zero would make every new class look free and pile them onto one leg.
-
-Each leg builds its own containers; Testcontainers randomises names, networks
-and host ports, so nothing needs coordinating between runners. The same script
-serves Azure DevOps with `--ado`, which wants a flat matrix object rather than
-per-stage arrays.
 
 ## Where the code lives
 
