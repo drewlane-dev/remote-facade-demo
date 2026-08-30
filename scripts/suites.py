@@ -15,7 +15,11 @@ and produced matrix legs named "(64-bit" and "xUnit.net". Asking for JSON
 removes the guessing rather than improving it.
 
 Usage:
-    suites.py <exe> [--max-parallel SPEC] [--timings FILE] [--ado]
+    suites.py <exe> [<exe> ...] [--max-parallel SPEC] [--timings FILE] [--ado]
+
+Several executables because the layers are separate PROJECTS now. Suites are
+still declared as traits, so a suite could in principle span projects; each leg
+records which executable to run so the pipeline never has to work it out.
 
     SPEC is "default=3" or "default=3,e2e=1" -- a cap on legs PER SUITE.
     Omitted, every class gets its own leg.
@@ -46,6 +50,17 @@ def listing(exe, what, *extra):
         [exe, "-list", f"{what}/json", "-noColor", "-noLogo", *extra],
         capture_output=True, text=True, check=True).stdout
     return json.loads(out)
+
+
+def _is_value_of_flag(args, candidate):
+    """True when `candidate` is the VALUE following --max-parallel or --timings,
+    so it is not mistaken for an executable path."""
+    for flag in ("--max-parallel", "--timings"):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 < len(args) and args[i + 1] is candidate:
+                return True
+    return False
 
 
 def parse_caps(spec):
@@ -108,7 +123,10 @@ def main():
     if not args:
         sys.exit("usage: suites.py <path-to-test-executable> [--max-parallel SPEC] [--ado]")
 
-    exe = args[0]
+    exes = [a for a in args if not a.startswith("--") and not _is_value_of_flag(args, a)]
+    if not exes:
+        sys.exit("usage: suites.py <exe> [<exe> ...] [--max-parallel SPEC] [--timings FILE] [--ado]")
+
     ado = "--ado" in args
     caps = {}
     if "--max-parallel" in args:
@@ -123,23 +141,29 @@ def main():
         else:
             print(f"  no timings at {path}; falling back to test counts", file=sys.stderr)
 
-    suite_names = listing(exe, "traits").get("Suite", [])
-    if not suite_names:
-        sys.exit("no Suite traits found; nothing to parallelise")
-
-    # One call for everything: each entry carries its class and its traits, so
-    # suite membership and test counts come from the same source of truth.
-    tests = listing(exe, "full")
     by_suite = defaultdict(lambda: defaultdict(int))
+    exe_of_class = {}
+    suite_names = set()
     orphans = set()
 
-    for t in tests:
-        suites_of = t.get("Traits", {}).get("Suite") or []
-        if not suites_of:
-            orphans.add(t["Class"])
-            continue
-        for s in suites_of:
-            by_suite[s][t["Class"]] += 1
+    for exe in exes:
+        suite_names.update(listing(exe, "traits").get("Suite", []))
+
+        # One call per executable: each entry carries its class and its traits,
+        # so suite membership and test counts come from the same source.
+        for t in listing(exe, "full"):
+            cls = t["Class"]
+            exe_of_class[cls] = exe
+
+            suites_of = t.get("Traits", {}).get("Suite") or []
+            if not suites_of:
+                orphans.add(cls)
+                continue
+            for s in suites_of:
+                by_suite[s][cls] += 1
+
+    if not suite_names:
+        sys.exit("no Suite traits found; nothing to parallelise")
 
     # A class in no suite would run on no runner, which is indistinguishable
     # from passing. Fatal, rather than a warning nobody reads.
@@ -168,11 +192,19 @@ def main():
             for c, count in by_suite[suite].items()
         }
 
-        legs = pack(weights, cap)
+        # A leg cannot span executables: one process runs one assembly. Pack
+        # per executable, then flatten.
+        legs = []
+        for exe in sorted({exe_of_class[c] for c in weights}):
+            subset = {c: w for c, w in weights.items() if exe_of_class[c] == exe}
+            legs.extend(pack(subset, cap))
         report(suite, legs, weights, timings["fixtures"].get(suite))
         result[suite] = [
             {
                 "name": f"{suite}-{i + 1}",
+                # Which executable to run. A leg only ever holds classes from
+                # one, because a single process cannot span assemblies.
+                "exe": exe_of_class[leg[0]],
                 # Ready-made arguments, so a pipeline never has to build them
                 # from an array in YAML.
                 "args": " ".join(f'-class "{c}"' for c in leg),
@@ -184,7 +216,10 @@ def main():
     if ado:
         # ADO wants one flat object keyed by a unique leg name.
         print(json.dumps({
-            leg["name"]: {"SUITE": s, "ARGS": leg["args"], "CLASSES": leg["classes"]}
+            leg["name"]: {
+                "SUITE": s, "EXE": leg["exe"],
+                "ARGS": leg["args"], "CLASSES": leg["classes"],
+            }
             for s, legs in result.items() for leg in legs
         }))
     else:

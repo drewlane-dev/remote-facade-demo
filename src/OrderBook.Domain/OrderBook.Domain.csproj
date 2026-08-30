@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>OrderBook</RootNamespace>
+    <AssemblyName>OrderBook.Domain</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.0" />
+    <!--
+      Pinned ABOVE what EF Core drags in. 6.1.1 ships lib/net9.0 but no
+      net10.0. 7.0.2 is the current release and is what the sibling harness
+      uses; pinning it here keeps EF Core from dragging an older one in.
+    -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.0" />
+    <!-- The startup below is a real composition root, so it needs the
+         registration APIs the way any application's Program.cs does. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageReference Include="RemoteFacade.Client" Version="3.2.0" />
+  </ItemGroup>
+</Project>

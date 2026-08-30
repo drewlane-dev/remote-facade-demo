@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- xUnit v3 projects are executables hosted on Microsoft.Testing.Platform. -->
+    <OutputType>Exe</OutputType>
+    <UseRidGraph>true</UseRidGraph>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="3.1.0" />
+    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="1.8.3" />
+    <PackageReference Include="Testcontainers" Version="4.6.0" />
+    <PackageReference Include="RemoteFacade.Client" Version="3.3.0" />
+    <PackageReference Include="RemoteFacade.Testcontainers" Version="3.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OrderBook.Tests.Shared\OrderBook.Tests.Shared.csproj" />
+    <ProjectReference Include="..\..\src\OrderBook.Domain\OrderBook.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The browser runs in a CONTAINER, so nothing is installed with
+         `playwright install`. The client version must match the image tag:
+         Playwright's wire protocol is not stable across versions. -->
+    <PackageReference Include="Microsoft.Playwright" Version="1.62.0" />
+  </ItemGroup>
+
+</Project>

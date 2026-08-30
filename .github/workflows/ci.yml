@@ -52,15 +52,16 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - run: dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
-        name: Build tests
+      - run: dotnet build OrderBook.slnx -c Release
+        name: Build the solution
 
       - id: suites
         name: Enumerate and pack suites (fails if a class has no suite)
         run: |
           set -euo pipefail
           MATRIX="$(./scripts/suites.py \
-            tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
+            tests/OrderBook.IntegrationTests/bin/Release/net10.0/OrderBook.IntegrationTests \
+            tests/OrderBook.E2ETests/bin/Release/net10.0/OrderBook.E2ETests \
             --max-parallel "$MAX_PARALLEL" \
             --timings timings.json)"
           echo "$MATRIX"
@@ -76,6 +77,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.discover.outputs.matrix).integration }}
+        filter: ["integration.slnf"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
@@ -86,11 +88,14 @@ jobs:
       # one leg run in a SINGLE process and share whatever fixture their
       # collection defines. Building the arguments here from an array would
       # lose that.
+      # The solution FILTER, not the whole solution: an integration runner has
+      # no reason to build the API or the e2e project, and building them is
+      # time this leg pays for nothing.
       - name: Run ${{ matrix.leg.classes }}
         run: |
           set -euo pipefail
-          dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
-          tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
+          dotnet build ${{ matrix.filter }} -c Release
+          "${{ matrix.leg.exe }}" \
             ${{ matrix.leg.args }} \
             -trx "${{ matrix.leg.name }}.trx" \
             -xml "${{ matrix.leg.name }}.xml"
@@ -112,6 +117,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.discover.outputs.matrix).e2e }}
+        filter: ["e2e.slnf"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
@@ -125,11 +131,14 @@ jobs:
       # one leg run in a SINGLE process and share whatever fixture their
       # collection defines. Building the arguments here from an array would
       # lose that.
+      # The solution FILTER, not the whole solution: an integration runner has
+      # no reason to build the API or the e2e project, and building them is
+      # time this leg pays for nothing.
       - name: Run ${{ matrix.leg.classes }}
         run: |
           set -euo pipefail
-          dotnet build tests/OrderBook.Tests/OrderBook.Tests.csproj -c Release
-          tests/OrderBook.Tests/bin/Release/net10.0/OrderBook.Tests \
+          dotnet build ${{ matrix.filter }} -c Release
+          "${{ matrix.leg.exe }}" \
             ${{ matrix.leg.args }} \
             -trx "${{ matrix.leg.name }}.trx" \
             -xml "${{ matrix.leg.name }}.xml"

@@ -1,0 +1,11 @@
+{
+  "solution": {
+    "path": "OrderBook.slnx",
+    "projects": [
+      "src\\OrderBook.Domain\\OrderBook.Domain.csproj",
+      "src\\OrderBook.Api\\OrderBook.Api.csproj",
+      "tests\\OrderBook.Tests.Shared\\OrderBook.Tests.Shared.csproj",
+      "tests\\OrderBook.E2ETests\\OrderBook.E2ETests.csproj"
+    ]
+  }
+}

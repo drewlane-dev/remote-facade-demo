@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OrderBook.Api/OrderBook.Api.csproj" />
+    <Project Path="src/OrderBook.Domain/OrderBook.Domain.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OrderBook.E2ETests/OrderBook.E2ETests.csproj" />
+    <Project Path="tests/OrderBook.IntegrationTests/OrderBook.IntegrationTests.csproj" />
+    <Project Path="tests/OrderBook.Tests.Shared/OrderBook.Tests.Shared.csproj" />
+  </Folder>
+</Solution>

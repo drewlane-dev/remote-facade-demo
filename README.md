@@ -200,47 +200,47 @@ transitive dependency, and the client ships the MSBuild target below.
 
 ## Two test layers, fanned out over runners
 
-Tests are grouped into **suites** — environments that can run on their own
-runner, in their own containers, with no shared state:
+The application is a real stack, and each layer tests it at a different seam:
 
-| Suite | What it starts | What belongs there |
-|---|---|---|
-| `integration` | one facade container | behaviour: it is faster, its failures point at one component, and it can assert things a page never shows |
-| `e2e` | facade + web app + browser | only what a browser can prove: rendering, navigation, script |
+| Suite | Project | What it starts | What belongs there |
+|---|---|---|---|
+| `integration` | `OrderBook.IntegrationTests` | SQL Server + facade containers | behaviour: faster, failures point at one component, and it can assert things a page never shows |
+| `e2e` | `OrderBook.E2ETests` | SQL Server + API + Angular + browser | only what a browser can prove: rendering, routing, script |
 
-Both layers use **one definition of the backend** ([`Backend.cs`](tests/OrderBook.Tests/Backend.cs)),
-so they cannot drift on image tag, options or plugin transport — and an e2e
-failure therefore tells you the UI is wrong rather than the environment.
+```
+   Playwright ──▶ Angular (nginx) ──▶ API ──┐
+                                             ├──▶ SQL Server
+   integration tests ──▶ facade container ──┘
+```
 
-The boundary between them is the **fixture, not the test count**. With container
-fixtures the wall-clock is dominated by starting the environment, so an even
-split by test count would have every runner pay the same setup for a fraction
-of the work.
+Both layers run **the same domain assembly** and the same `AddOrderBook`
+wiring, so a bug cannot pass in one and fail in the other. The facade container
+loads it as a plugin published by `RemoteFacade.Client`'s MSBuild target; the
+API references it directly.
+
+`OrderBook.slnx` holds every project, and `integration.slnf` / `e2e.slnf` are
+solution filters so a runner builds only what its layer needs — an integration
+runner has no reason to compile the API or the Angular host project.
+
+Suites are declared as traits and discovered from the **built assemblies**:
 
 ```csharp
 [Trait(Suites.Name, Suites.E2E)]
-[Collection(WebUiCollection.Name)]
+[Collection(E2ECollection.Name)]
 public class NavigationTests { ... }
 ```
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) discovers them from the
-**built assembly** and fans each stage out over its classes:
-
 ```bash
-scripts/suites.py <test-exe>
-# {"e2e": ["...NavigationTests", "...OrderPlacementTests"],
-#  "integration": ["...GraphTests", "...ProtocolTests"]}
+scripts/suites.py <integration-exe> <e2e-exe> --max-parallel default=2,e2e=1
 ```
 
 Nothing lists the classes in YAML. A hand-maintained matrix drifts the moment
 someone adds a test class, and it drifts *silently* — the class runs on no
 runner, every leg stays green, and nothing reports that coverage shrank. So the
-script **fails rather than emitting a matrix**:
+script **fails rather than emitting a matrix** when a class belongs to no suite.
 
-```
-These test classes declare no [Trait(Suites.Name, ...)], so no runner would take them:
-  OrderBook.Tests.OrphanProbeTests
-```
+Each leg records which executable to run, because a single process cannot span
+assemblies.
 
 ### Controlling how many runners
 

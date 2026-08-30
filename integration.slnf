@@ -1,0 +1,10 @@
+{
+  "solution": {
+    "path": "OrderBook.slnx",
+    "projects": [
+      "src\\OrderBook.Domain\\OrderBook.Domain.csproj",
+      "tests\\OrderBook.Tests.Shared\\OrderBook.Tests.Shared.csproj",
+      "tests\\OrderBook.IntegrationTests\\OrderBook.IntegrationTests.csproj"
+    ]
+  }
+}

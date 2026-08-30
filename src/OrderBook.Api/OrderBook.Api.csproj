@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>OrderBook.Api</RootNamespace>
+
+    <!--
+      Microsoft.Data.SqlClient ships its Unix implementation as a PORTABLE RID
+      asset (runtimes/unix/lib). .NET 8 turned the full RID graph off by
+      default, so that asset stops being matched and the netstandard2.0
+      reference assembly loads instead. Its members throw "Microsoft.Data.
+      SqlClient is not supported on this platform" at the first connection.
+    -->
+    <UseRidGraph>true</UseRidGraph>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OrderBook.Domain\OrderBook.Domain.csproj" />
+  </ItemGroup>
+</Project>

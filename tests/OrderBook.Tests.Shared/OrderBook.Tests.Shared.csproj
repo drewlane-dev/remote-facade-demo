@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!--
+      Microsoft.Data.SqlClient ships its Unix implementation as a portable RID
+      asset (runtimes/unix/lib). .NET 8 turned the full RID graph off by
+      default, so that asset stops being matched and the netstandard2.0
+      reference assembly loads instead. Its members throw at the first
+      connection.
+    -->
+    <UseRidGraph>true</UseRidGraph>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Testcontainers" Version="4.6.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OrderBook.Domain\OrderBook.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

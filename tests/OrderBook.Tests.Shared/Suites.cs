@@ -1,7 +1,12 @@
 namespace OrderBook.Tests;
 
 /// <summary>
-/// The parallelisable units of this suite.
+/// The parallelisable units.
+///
+/// Each is now its own PROJECT as well as its own trait. The projects give
+/// separate compilation and separate solution filters; the traits are what the
+/// pipeline discovers and fans out over, and they still matter because one
+/// project can hold several classes.
 ///
 /// A suite is a set of tests that can run on its OWN agent, in its own
 /// containers, with no shared state. The boundary is the fixture, not the test
